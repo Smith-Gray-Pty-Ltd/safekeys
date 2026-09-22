@@ -1,0 +1,60 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/typescript-sdk
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  TypeScript SDK — the Node-side counterpart to the Python SDK, targeting Mastra, Vercel AI SDK, and OpenAI Agents SDK customers. Identical token-only API surface: accept and return capability tokens and folder paths, never plaintext.
+
+$system: smith-gray/system
+name: TypeScript SDK
+status: planned
+type: api
+runtime: node
+port: 0
+paths:
+  - packages/sdk-typescript
+depends_on:
+  - cli
+
+tech_stack:
+  language: TypeScript / Node
+  packaging: npm workspace package
+  agent_frameworks: Mastra, Vercel AI SDK, OpenAI Agents SDK
+
+dev:
+  command: "npm test --workspace packages/sdk-typescript"
+  url: ""
+  env:
+    SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
+
+prod:
+  url: ""
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: vitest
+  command: "npm test --workspace packages/sdk-typescript"
+  coverage_target: "80%"
+
+security:
+  auth_method: Local sidecar socket
+  secrets_ref: docs/help/security-model.md
+
+modules:
+  - name: client
+    purpose: Sidecar socket client and token handling
+    paths: [packages/sdk-typescript/src]
+
+risks:
+  - "Ships after the Python SDK, so API drift between the two SDKs is a risk; both must mirror the same contract."
+
+future:
+  - "Framework adapters built on top of the core SDK rather than bespoke runtimes."
+
+decisions:
+  - id: ts-after-python
+    decision: Ship the TypeScript SDK immediately after the MVP, not inside it.
+    rationale: The blueprint's MVP list names Python first; the TS SDK serves Node runtimes but is a second adapter on an already-proven contract, so it does not gate the two-agent demo.
+    status: accepted

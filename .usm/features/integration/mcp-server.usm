@@ -1,0 +1,128 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/integration-mcp-server
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  The Safekeys MCP server exposes secret tooling to every MCP-capable agent runtime — Claude,
+  Cursor, Codex, Gemini — through one standard tool bus. It is the highest-leverage MVP
+  integration: agents can create and use secrets with no per-vendor SDK, receiving only tokens,
+  paths, and status.
+$system: smith-gray/system
+$service: smith-gray/mcp-server
+status: planned
+intent: |
+  Every agent framework integration is a thin adapter on the same contract, so building them one by
+  one is wasted effort. MCP is the common tool bus across the major 2026 runtimes, which makes a
+  single MCP server the cheapest way to cover many products at once and the best adoption wedge.
+
+flows:
+  - id: expose-tools
+    name: Expose Safekeys tools over MCP
+    description: The MCP server registers token-only tools with the host runtime.
+    steps:
+      - id: s1
+        action: setup
+        target: MCP server starts and registers create_secret, resolve_for_tool, list, and revoke tools.
+      - id: s2
+        action: observe
+        target: The host agent runtime discovers the tools through the standard MCP handshake.
+      - id: s3
+        action: observe
+        target: Tool schemas expose identifiers, tokens, and paths only.
+  - id: call-tool
+    name: Call a Safekeys tool from an agent
+    description: The agent invokes a tool and receives a token or status, never a value.
+    steps:
+      - id: s1
+        action: receive
+        target: MCP server receives a tool call from the host runtime.
+      - id: s2
+        action: send
+        target: The handler forwards the operation to the local sidecar over its socket.
+      - id: s3
+        action: receive
+        target: A token, path, or status is returned to the agent.
+      - id: s4
+        action: observe
+        target: The tool result contains no plaintext, and the call arguments never carried a value.
+
+contracts:
+  - id: token-only-tool-results
+    description: MCP tool results never contain resolved plaintext.
+    must_have:
+      - Results carry tokens, folder paths, or status codes
+      - No tool returns a resolved value
+      - Tool arguments carry tokens, not values
+  - id: single-server-many-runtimes
+    description: One MCP server serves all compatible runtimes without per-vendor code.
+    must_have:
+      - Implementation uses the standard MCP protocol and stdio transport
+      - No vendor-specific branching exists
+      - Adding a runtime requires no change to the server
+  - id: delegate-to-sidecar
+    description: The MCP server performs no crypto and owns no key material.
+    must_have:
+      - All resolution is delegated to the local sidecar
+      - The server holds no keys and no ciphertext handling
+      - Sidecar unavailability surfaces as an error, never a fallback
+  - id: out-of-scope-harnesses
+    description: Non-MCP harnesses are explicitly out of MVP scope.
+    must_have:
+      - CrewAI, AutoGen, Pydantic AI, smolagents, and custom enterprise harnesses are not built in v0
+      - They are supported later as examples calling the same SDK or MCP tools
+      - No dedicated runtime adapters are created
+
+tests:
+  - id: tool-result-has-no-plaintext
+    flow: call-tool
+    setup:
+      tool: resolve_for_tool
+      secret_value: "mcp-test-secret"
+    expect:
+      - assertion: the tool result contains no plaintext
+      - assertion: the result is a token, path, or status
+    contracts:
+      - token-only-tool-results
+  - id: server-has-no-vendor-branching
+    flow: expose-tools
+    setup:
+      static_check: true
+    expect:
+      - assertion: no vendor-specific code paths exist
+      - assertion: the server implements standard MCP only
+    contracts:
+      - single-server-many-runtimes
+  - id: sidecar-unavailable-is-an-error
+    flow: call-tool
+    setup:
+      sidecar_running: false
+    expect:
+      - assertion: the tool returns an error
+      - assertion: no fallback resolution is attempted
+    contracts:
+      - delegate-to-sidecar
+
+decisions:
+  - id: mcp-is-first
+    decision: Make the MCP server the first harness integration shipped.
+    rationale: The blueprint identifies MCP as the highest-leverage integration because it is the common tool bus across Claude, Cursor, Codex, Gemini, and most 2026 agent runtimes — one server covers many products without per-vendor SDKs.
+    status: accepted
+  - id: three-harnesses-only
+    decision: Limit MVP integrations to the MCP server, the CLI exec wrapper, and the Python SDK.
+    rationale: "The integration surface that matters is agent asks to use a secret, sidecar injects it outside the model — every additional framework is another thin adapter on that same contract. Three covers the two-agent demo and the major runtimes."
+    status: accepted
+  - id: examples-not-runtimes
+    decision: Support further harnesses later as examples calling the same SDK or MCP tools.
+    rationale: Maintaining dedicated runtimes per framework creates ongoing cost with no new capability; examples demonstrate integration without becoming maintenance burdens.
+    status: accepted
+
+implementation:
+  primary: packages/mcp-server/src/tools
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/exec-wrapper"
+  - "smith-gray/integration-python-sdk"
+  - "smith-gray/sidecar-resolution"

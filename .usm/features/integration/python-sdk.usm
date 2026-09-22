@@ -1,0 +1,143 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/integration-python-sdk
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  The Python Agent SDK is a token-only client for teams building agents, shipping LangChain and
+  LangGraph tools first. `create_secret` and `resolve_for_tool` accept and return only capability
+  tokens and folder paths — plaintext is unrepresentable in the API surface, so an agent cannot
+  accidentally route a value through model context.
+$system: smith-gray/system
+$service: smith-gray/python-sdk
+status: planned
+intent: |
+  Agent developers will do whatever is easiest, so the safest path has to be the easy path. A SDK
+  whose types make plaintext impossible to pass or receive removes the opportunity for the most
+  common mistake — and it is what Python-first agent teams already expect from a tool integration.
+
+flows:
+  - id: create-secret-tool
+    name: Create a secret via the SDK tool
+    description: The agent creates a secret and receives a token.
+    steps:
+      - id: s1
+        action: receive
+        target: Agent calls create_secret with metadata and a non-context value source such as a file path.
+      - id: s2
+        action: send
+        target: SDK hands the value to the local sidecar over the Unix socket.
+      - id: s3
+        action: receive
+        target: SDK returns a capability token and folder path.
+      - id: s4
+        action: observe
+        target: The agent transcript contains no plaintext.
+  - id: resolve-for-tool
+    name: Resolve a secret for a tool call
+    description: The agent requests use of a secret without receiving the value.
+    steps:
+      - id: s1
+        action: receive
+        target: Agent calls resolve_for_tool with a token and the target tool or command.
+      - id: s2
+        action: send
+        target: SDK forwards the request to the sidecar, which injects into the consumer.
+      - id: s3
+        action: receive
+        target: SDK returns a success status or placeholder.
+      - id: s4
+        action: observe
+        target: The value never enters the Python process hosting the agent.
+
+contracts:
+  - id: token-only-surface
+    description: The SDK's public API accepts and returns tokens and paths, never values.
+    must_have:
+      - No public function returns a resolved plaintext value
+      - create_secret returns a token, not the value
+      - resolve_for_tool returns a status or placeholder
+  - id: no-plaintext-in-context
+    description: Using the SDK cannot place plaintext into model context.
+    must_have:
+      - Values are read from the sidecar channel, not passed as literals from the agent
+      - Tool call arguments carry tokens
+      - The SDK's docstrings and examples never suggest pasting a value
+  - id: sidecar-is-the-transport
+    description: The SDK delegates all resolution to the sidecar rather than implementing crypto.
+    must_have:
+      - The SDK contains no decryption or key handling code
+      - Communication is over the local Unix socket
+      - Failure to reach the sidecar is surfaced as an error, never a fallback
+  - id: langchain-tool-parity
+    description: The LangChain and LangGraph tools behave identically to the raw SDK calls.
+    must_have:
+      - Tool definitions wrap the same SDK functions
+      - Tool schemas expose tokens and paths only
+      - Tool outputs never include values
+
+tests:
+  - id: create-returns-token-not-value
+    flow: create-secret-tool
+    setup:
+      value_source: "file"
+      secret_value: "sdk-test-secret"
+    expect:
+      - assertion: the return value is a token and path
+      - assertion: the return value does not contain the secret
+    contracts:
+      - token-only-surface
+  - id: resolve-returns-status-only
+    flow: resolve-for-tool
+    setup:
+      token: "safekey://v1/demo"
+    expect:
+      - assertion: the return value is a status or placeholder
+      - assertion: no plaintext is returned to the agent process
+    contracts:
+      - token-only-surface
+      - no-plaintext-in-context
+  - id: sdk-has-no-crypto
+    flow: create-secret-tool
+    setup:
+      static_check: true
+    expect:
+      - assertion: the SDK imports no decryption or key-handling primitives
+      - assertion: all resolution goes through the sidecar socket
+    contracts:
+      - sidecar-is-the-transport
+  - id: langgraph-agent-transcript-clean
+    flow: create-secret-tool
+    setup:
+      agent: "langgraph"
+    expect:
+      - assertion: the agent transcript contains no plaintext
+      - assertion: the agent holds only a token afterwards
+    contracts:
+      - no-plaintext-in-context
+      - langchain-tool-parity
+
+decisions:
+  - id: python-first
+    decision: Ship the Python SDK as the first language binding, with LangChain and LangGraph tools.
+    rationale: Python is still the default for people building agents, and those teams expect framework-native tools rather than a raw client. It is also one of the three MVP harness integrations named in the blueprint.
+    status: accepted
+  - id: unrepresentable-plaintext
+    decision: Design the API so plaintext cannot be passed or received.
+    rationale: A type surface that cannot express a value is a stronger guarantee than documentation asking developers not to pass one.
+    status: accepted
+  - id: delegate-all-crypto
+    decision: Keep the SDK free of decryption and key handling.
+    rationale: Duplicating crypto in every SDK multiplies the audit surface on the most sensitive path; the sidecar exists precisely so clients do not need it.
+    status: accepted
+
+implementation:
+  primary: packages/sdk-python/safekeys
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/secret-creation"
+  - "smith-gray/sidecar-resolution"
+  - "smith-gray/mcp-server"
+  - "smith-gray/exec-wrapper"

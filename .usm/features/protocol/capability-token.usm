@@ -1,0 +1,151 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/capability-token
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  The capability token is the only secret-bearing artefact an agent reasons about. A short-lived,
+  scoped, audience-bound handle that contains zero secret material, it is safe to pass through
+  prompts, memory, tool calls, and multi-agent buses where a value is not.
+$system: smith-gray/system
+$service: smith-gray/control-plane
+status: planned
+intent: |
+  Agents must be able to define, create, transport, and request use of secrets without ever
+  receiving plaintext or long-term keys. A token decouples "the right to use a secret" from "the
+  secret" itself, so authority can travel through untrusted channels — model context, logs, MCP
+  buses — while the value cannot.
+
+flows:
+  - id: mint-token
+    name: Mint a capability token
+    description: The control plane issues a signed token for a specific object, scope, and audience.
+    steps:
+      - id: s1
+        action: receive
+        target: Control plane receives an object id, requested scope, audience, and TTL from the sidecar.
+      - id: s2
+        action: validate
+        target: Policy is evaluated — is this requester allowed to mint this scope for this object and audience?
+      - id: s3
+        action: generate
+        target: Generate claims (sid, scope, aud, exp, nbf, jti) and sign with the active kid.
+      - id: s4
+        action: record
+        target: Persist the jti so it can be revoked and audited.
+      - id: s5
+        action: receive
+        target: Caller receives the token URI; no secret material is present in the response.
+  - id: verify-token
+    name: Verify a token at the sidecar
+    description: The sidecar is the only component that validates a token before resolving.
+    steps:
+      - id: s1
+        action: parse
+        target: Parse the safekey:// URI and extract the token and claims.
+      - id: s2
+        action: validate
+        target: Verify signature against the issuer's key (kid), then expiry (exp/nbf).
+      - id: s3
+        action: validate
+        target: Verify the audience matches this resolver/environment identity.
+      - id: s4
+        action: validate
+        target: Verify the requested operation is within the token's scope (least privilege).
+      - id: s5
+        action: validate
+        target: Check the jti against the revocation denylist.
+      - id: s6
+        action: observe
+        target: On any failure, deny by default without revealing why beyond a generic denial code.
+
+contracts:
+  - id: token-contains-no-secrets
+    description: A capability token must never contain plaintext, key material, or anything that yields it.
+    must_have:
+      - Claims are limited to object identifier, scope, audience, time bounds, unique id, and signature
+      - No field may carry the secret value, a DEK, or a KEK
+      - A token captured from a prompt or log is not sufficient to decrypt a folder without a reachable sidecar and key authority
+  - id: short-lived-and-scoped
+    description: Tokens are least-privilege and short-lived by construction.
+    must_have:
+      - TTL measured in minutes to hours, never days
+      - scope is one of read, unwrap, inject-env, inject-file, sign
+      - aud binds the token to an intended resolver identity or environment
+  - id: revocable
+    description: Every token can be invalidated immediately, independent of its TTL.
+    must_have:
+      - A unique jti is issued and recorded at mint time
+      - Revocation is enforced by a denylist checked on every resolve
+      - Revocation takes effect without waiting for expiry
+  - id: signature-verifiable
+    description: The sidecar can verify authenticity offline of the issuing control plane's authority.
+    must_have:
+      - Tokens are signed and carry a key id
+      - Signature verification happens before any key-store interaction
+      - An unverifiable token is denied
+
+tests:
+  - id: token-has-no-secret-material
+    flow: mint-token
+    setup:
+      secret_value: "super-secret-value"
+    expect:
+      - assertion: the minted token string does not contain the secret value in any encoding
+      - assertion: decoding the token yields only the declared claims
+      - assertion: no DEK or KEK identifier resolves to recoverable key bytes
+    contracts:
+      - token-contains-no-secrets
+  - id: expired-token-denied
+    flow: verify-token
+    setup:
+      ttl_seconds: 1
+      wait_seconds: 2
+    expect:
+      - assertion: resolution is denied with a generic denial
+      - assertion: no key-store unwrap is attempted
+    contracts:
+      - short-lived-and-scoped
+  - id: wrong-audience-denied
+    flow: verify-token
+    setup:
+      aud: "env-production"
+      resolver_identity: "env-staging"
+    expect:
+      - assertion: resolution is denied
+      - assertion: no plaintext is materialised
+    contracts:
+      - short-lived-and-scoped
+  - id: revoked-token-denied-immediately
+    flow: verify-token
+    setup:
+      revoke_before_use: true
+      ttl_seconds: 3600
+    expect:
+      - assertion: resolution is denied even though the token has not expired
+    contracts:
+      - revocable
+
+decisions:
+  - id: uri-form
+    decision: "Express tokens as a URI: safekey://v1/<id>?scope=<action>&aud=<env>&exp=<unix>&kid=<key-id>"
+    rationale: A URI is copyable through any transport, self-describing, and easy to redact in logs by matching a prefix. It makes the token obviously a handle rather than a value.
+    status: accepted
+  - id: short-ttl-over-long-lived
+    decision: Use short TTL plus a jti denylist rather than long-lived tokens with periodic rotation.
+    rationale: Short TTL bounds the damage window of a leaked token; the denylist provides immediate revocation for the cases where waiting is unacceptable. Together they cover both the common and the urgent case.
+    status: accepted
+  - id: generic-denials
+    decision: Denials return a generic failure rather than the specific violated check.
+    rationale: Detailed denial reasons are a probing oracle for an attacker refining a forged token.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/token
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/secret-transport"
+  - "smith-gray/token-revocation"
+  - "smith-gray/sidecar-resolution"

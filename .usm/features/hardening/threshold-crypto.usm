@@ -1,0 +1,151 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/threshold-crypto
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Phase 2 hardening splits key knowledge between the secure element and the authority, reconstructs
+  ephemerally only inside the element for a requested operation, and adds a hybrid classical plus
+  ML-KEM-class ratchet on control-plane sessions with remote attestation before unwrap. No single
+  compromised component holds enough to reconstruct a key.
+$system: smith-gray/system
+$service: smith-gray/sidecar
+status: planned
+intent: |
+  A hardware root protects a key from a compromised host, but the device itself remains a single
+  point of trust and long-lived ciphertext remains exposed to future quantum capability. Threshold
+  splitting removes the single holder, and a post-quantum ratchet protects sessions against
+  harvest-now-decrypt-later.
+
+flows:
+  - id: split-key-shares
+    name: Split key knowledge across holders
+    description: One share lives in the secure element; complementary shares live at the authority.
+    steps:
+      - id: s1
+        action: generate
+        target: Provisioning splits key knowledge into shares with a threshold policy.
+      - id: s2
+        action: setup
+        target: One share is installed in the secure element; complementary shares are held at the authority.
+      - id: s3
+        action: observe
+        target: No single holder can reconstruct the key alone.
+  - id: ephemeral-reconstruction
+    name: Reconstruct ephemerally inside the element
+    description: The key exists only inside the secure element for the duration of one operation.
+    steps:
+      - id: s1
+        action: receive
+        target: Device receives an authorised operation request and attests remotely.
+      - id: s2
+        action: validate
+        target: Remote attestation succeeds before any unwrap is permitted.
+      - id: s3
+        action: generate
+        target: The key is reconstructed inside the element for the requested operation only.
+      - id: s4
+        action: delete
+        target: The reconstructed material is destroyed when the operation completes.
+  - id: hybrid-ratchet
+    name: Hybrid post-quantum session ratchet
+    description: Control-plane sessions use a classical plus PQ ratchet.
+    steps:
+      - id: s1
+        action: setup
+        target: Negotiate a hybrid KEM combining a classical and an ML-KEM-class mechanism.
+      - id: s2
+        action: generate
+        target: Ratchet session keys forward so compromise of one key does not expose past traffic.
+      - id: s3
+        action: observe
+        target: Harvested session traffic is not decryptable by a future quantum adversary.
+
+contracts:
+  - id: no-single-holder
+    description: No single component may be able to reconstruct the key.
+    must_have:
+      - Key knowledge is split with a threshold policy
+      - The secure element alone is insufficient
+      - The authority alone is insufficient
+  - id: attest-before-unwrap
+    description: Remote attestation is required before any unwrap.
+    must_have:
+      - Attestation covers device identity and state
+      - Failure denies the operation
+      - Attestation is not optional or bypassable
+  - id: ephemeral-only
+    description: Reconstructed key material exists only inside the secure element, only for one operation.
+    must_have:
+      - No reconstruction in host memory
+      - Material is destroyed after the operation
+      - Nothing persists between operations
+  - id: post-quantum-sessions
+    description: Control-plane sessions are protected against harvest-now-decrypt-later.
+    must_have:
+      - Hybrid classical plus PQ key establishment
+      - Forward-secret ratcheting of session keys
+      - Documented as Phase 2, not MVP
+
+tests:
+  - id: single-share-insufficient
+    flow: split-key-shares
+    setup:
+      available_shares: 1
+      threshold: 2
+    expect:
+      - assertion: reconstruction fails
+      - assertion: no key material is produced
+    contracts:
+      - no-single-holder
+  - id: unattested-device-denied
+    flow: ephemeral-reconstruction
+    setup:
+      attestation: "fail"
+    expect:
+      - assertion: unwrap is denied
+      - assertion: no reconstruction occurs
+    contracts:
+      - attest-before-unwrap
+  - id: reconstruction-does-not-persist
+    flow: ephemeral-reconstruction
+    setup:
+      operations: 2
+    expect:
+      - assertion: no reconstructed material survives between operations
+      - assertion: host memory never contains the key
+    contracts:
+      - ephemeral-only
+  - id: session-ratchet-forward-secret
+    flow: hybrid-ratchet
+    setup:
+      compromise: "session key at time T"
+    expect:
+      - assertion: traffic before T is not decryptable
+      - assertion: the hybrid KEM was used for establishment
+    contracts:
+      - post-quantum-sessions
+
+decisions:
+  - id: defer-to-phase-2
+    decision: Keep threshold crypto and post-quantum ratchets out of the MVP and Phase 1.
+    rationale: The MVP already meets the product promise with software isolation, and the blueprint is explicit that the agent-facing surface must not change when these land. Deferring keeps time to beta short without weakening the shipped guarantee.
+    status: accepted
+  - id: hybrid-not-pq-only
+    decision: Use a hybrid classical plus ML-KEM-class construction rather than post-quantum only.
+    rationale: Hybrid avoids depending entirely on relatively young PQ primitives while still closing the harvest-now-decrypt-later exposure.
+    status: accepted
+  - id: threshold-over-single-device
+    decision: Split knowledge across element and authority rather than trusting a single device.
+    rationale: A secure element is a strong boundary but still one holder; splitting means compromise of the device and compromise of the authority are both required, which is the difference between a breach and a non-event.
+    status: accepted
+
+implementation:
+  primary: apps/sidecar/internal/verify
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/hardware-root"
+  - "smith-gray/envelope-encryption"
+  - "smith-gray/sidecar-resolution"

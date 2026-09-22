@@ -1,0 +1,141 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/envelope-encryption
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Envelope encryption separates the key that protects a secret from the key that protects that key.
+  Each secret is encrypted with a random data encryption key (DEK); the DEK is wrapped by a
+  key-encryption key (KEK) held in the key store. The sidecar unwraps a DEK only for the duration of
+  a resolve, then zeroises both the DEK and the plaintext.
+$system: smith-gray/system
+$service: smith-gray/sidecar
+status: planned
+intent: |
+  Rotating or revoking a master key must not require re-encrypting every secret ever stored, and a
+  compromised DEK must expose only one object. Envelope encryption gives per-object key isolation
+  and a single small set of KEKs to protect, which is also the shape that later lets the KEK live in
+  a secure element or be reconstructed under threshold policy without touching the data.
+
+flows:
+  - id: wrap-dek
+    name: Wrap a data encryption key
+    description: A new DEK is generated locally and wrapped by the KEK without leaving the key store's trust boundary.
+    steps:
+      - id: s1
+        action: generate
+        target: Generate a random DEK for the object.
+      - id: s2
+        action: encrypt
+        target: Encrypt the plaintext object with the DEK.
+      - id: s3
+        action: send
+        target: Send the DEK to the key store for wrapping under the KEK; only the wrapped form is persisted.
+      - id: s4
+        action: observe
+        target: Plaintext is discarded from memory after encryption.
+  - id: unwrap-dek
+    name: Unwrap a DEK for a resolve
+    description: The sidecar requests unwrap only after a token has passed every verification step.
+    steps:
+      - id: s1
+        action: transmit
+        target: Sidecar sends the wrapped DEK and token context to the key store after token verification.
+      - id: s2
+        action: receive
+        target: Key store returns the unwrapped DEK over an authenticated channel.
+      - id: s3
+        action: decrypt
+        target: Sidecar decrypts the target object in memory.
+      - id: s4
+        action: delete
+        target: Zeroise the DEK and the plaintext buffer once injection completes.
+
+contracts:
+  - id: kek-never-leaves-store
+    description: The long-term key-encryption key must never be exported from the key store in the MVP, and never leave the secure element in later phases.
+    must_have:
+      - Only wrapped DEKs are persisted outside the key store
+      - The sidecar receives unwrapped DEKs transiently, never KEKs
+      - No code path writes a KEK to disk, a log, or a response
+  - id: per-object-dek
+    description: Every object is encrypted under its own random DEK.
+    must_have:
+      - A DEK is generated fresh per object, never reused across objects
+      - Compromise of one DEK exposes exactly one object
+      - DEKs are high-entropy random values from a CSPRNG
+  - id: transient-and-zeroised
+    description: Unwrapped key material and plaintext exist only for the duration of a resolve.
+    must_have:
+      - The DEK is zeroised immediately after use
+      - The plaintext buffer is zeroised immediately after injection
+      - Neither is written to logs, traces, or crash dumps by design
+  - id: no-ai-cloud-kms-root
+    description: A multi-tenant AI-cloud KMS must not serve as the root of trust.
+    must_have:
+      - The root key store is self-hosted, then an HSM or secure element
+      - The MVP key store is OpenBao or Vault, not a model provider's KMS
+      - Documented explicitly so an integrator does not substitute a provider KMS
+
+tests:
+  - id: kek-not-exportable
+    flow: wrap-dek
+    setup:
+      keystore: openbao-dev
+    expect:
+      - assertion: the created KEK cannot be read back in plaintext through the API
+      - assertion: only wrapped DEKs are persisted
+    contracts:
+      - kek-never-leaves-store
+  - id: unique-dek-per-object
+    flow: wrap-dek
+    setup:
+      objects: 100
+    expect:
+      - assertion: all 100 wrapped DEKs differ
+      - assertion: no DEK is reused across objects
+    contracts:
+      - per-object-dek
+  - id: dek-zeroised-after-resolve
+    flow: unwrap-dek
+    setup:
+      single_resolve: true
+    expect:
+      - assertion: the plaintext buffer is cleared after injection
+      - assertion: no plaintext persists in the sidecar after the resolve returns
+    contracts:
+      - transient-and-zeroised
+  - id: deny-by-default-when-store-unreachable
+    flow: unwrap-dek
+    setup:
+      keystore_reachable: false
+    expect:
+      - assertion: resolution fails closed
+      - assertion: no cached or fallback plaintext is used
+    contracts:
+      - transient-and-zeroised
+
+decisions:
+  - id: openbao-or-vault
+    decision: Use OpenBao or Vault Transit/KV as the MVP key store.
+    rationale: Mature, self-hostable, and auditable, with wrapping primitives already available. Auto-unseal comes later. It avoids building a key store before proving the protocol.
+    alternatives:
+      - option: AWS KMS / cloud provider KMS
+        rejected_because: It puts the root of trust in a provider the customer may not control, and a multi-tenant AI-cloud KMS in particular could be reachable by the model provider — defeating the product's core property.
+      - option: Build a bespoke key store
+        rejected_because: It slows the MVP and adds an unreviewed crypto component on the most sensitive path.
+    status: accepted
+  - id: envelope-not-direct
+    decision: Wrap keys rather than encrypting secrets directly under a master key.
+    rationale: Envelope encryption keeps per-object isolation and makes master key rotation cheap, which is also the structure required to move the KEK into hardware or threshold custody without changing the data layer.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/keystore
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/encrypted-folder"
+  - "smith-gray/sidecar-resolution"
+  - "smith-gray/hardware-root"

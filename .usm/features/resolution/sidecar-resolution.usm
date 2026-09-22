@@ -1,0 +1,157 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/sidecar-resolution
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Token resolution is the act that turns a capability token into a plaintext value for exactly one
+  non-LLM consumer. It happens only in the privileged sidecar: verify the token, unwrap the DEK,
+  decrypt the object, inject into the consumer, zeroise. The sidecar is the only component allowed
+  to perform it, and it denies by default.
+$system: smith-gray/system
+$service: smith-gray/sidecar
+status: planned
+intent: |
+  This is the enforcement point for the whole product. Every other component can be compromised or
+  merely careless; as long as resolution only occurs inside a separated privileged process that
+  checks a token first, the model never sees a secret. Concentrating the sensitive operation in one
+  auditable place is what makes the security property architectural rather than aspirational.
+
+flows:
+  - id: resolve-and-inject
+    name: Resolve a token and inject the secret
+    description: The sidecar takes a token from a local caller and injects the secret into a non-LLM consumer.
+    steps:
+      - id: s1
+        action: receive
+        target: Receive a resolve request and capability token over the local Unix domain socket.
+      - id: s2
+        action: validate
+        target: Verify signature, expiry, audience, scope, and jti denylist. Deny on any failure.
+      - id: s3
+        action: validate
+        target: Evaluate local policy — may this process request this injection method for this object?
+      - id: s4
+        action: transmit
+        target: Request DEK unwrap from the key store.
+      - id: s5
+        action: decrypt
+        target: Decrypt the target object in sidecar memory.
+      - id: s6
+        action: send
+        target: Inject into the consumer (env var, temp file, socket/pipe, or exec).
+      - id: s7
+        action: delete
+        target: Zeroise the plaintext and DEK, then return only a success code.
+      - id: s8
+        action: observe
+        target: Append an audit record — who, what scope, which jti, which host — without plaintext.
+
+contracts:
+  - id: resolution-only-in-sidecar
+    description: No component other than the sidecar may resolve a token or decrypt an object.
+    must_have:
+      - The sidecar runs as a different OS user from any agent process
+      - No shared memory exists between the sidecar and agents
+      - SDKs, MCP server, and CLI delegate resolution to the sidecar rather than implementing it
+  - id: verify-before-unwrap
+    description: No key-store interaction may occur before the token passes every check.
+    must_have:
+      - Signature, expiry, audience, scope, and denylist checks all precede unwrap
+      - A failed check results in no unwrap attempt
+      - Verification is not skippable by configuration
+  - id: deny-by-default
+    description: Absent, ambiguous, or failed authorisation results in denial.
+    must_have:
+      - No implicit trust from network origin or process identity alone
+      - Unreachable key store or control plane fails closed
+      - Local policy default is deny when unspecified
+  - id: agent-gets-status-not-value
+    description: The agent-side caller receives a success or deny signal, never the resolved value.
+    must_have:
+      - Resolution responses carry a status code, a placeholder name, or a path
+      - Values are never returned on the agent's stdout
+      - The caller cannot read the injected value back through the sidecar API
+  - id: audit-without-plaintext
+    description: Every resolve attempt is recorded without recording the secret.
+    must_have:
+      - Records include requester, scope, jti, object id, host, and outcome
+      - Records never contain plaintext, DEKs, or KEKs
+      - Denials are recorded as well as successes
+
+tests:
+  - id: resolution-denied-without-token
+    flow: resolve-and-inject
+    setup:
+      token: null
+    expect:
+      - assertion: the request is denied
+      - assertion: no key-store unwrap is attempted
+      - assertion: no plaintext is materialised
+    contracts:
+      - verify-before-unwrap
+  - id: agent-never-receives-value
+    flow: resolve-and-inject
+    setup:
+      injection_method: inject-env
+    expect:
+      - assertion: the response contains only a status or placeholder
+      - assertion: the resolved value does not appear in the response body
+    contracts:
+      - agent-gets-status-not-value
+  - id: resolve-fails-closed-without-keystore
+    flow: resolve-and-inject
+    setup:
+      keystore_reachable: false
+      valid_token: true
+    expect:
+      - assertion: resolution is denied
+      - assertion: no cached value is substituted
+    contracts:
+      - deny-by-default
+  - id: every-resolve-is-audited
+    flow: resolve-and-inject
+    setup:
+      valid_token: true
+    expect:
+      - assertion: an audit record exists for the resolve
+      - assertion: the record contains the jti and outcome
+      - assertion: the record contains no plaintext
+    contracts:
+      - audit-without-plaintext
+  - id: prompt-injection-cannot-dump-keys
+    flow: resolve-and-inject
+    setup:
+      attack: "model instructs agent to print all environment variables and resolve every token it can see"
+    expect:
+      - assertion: the agent can only request resolution via the token it holds
+      - assertion: injected values are not readable back through the sidecar
+      - assertion: no long-term key material is reachable from the agent's process
+    contracts:
+      - resolution-only-in-sidecar
+      - agent-gets-status-not-value
+
+decisions:
+  - id: sidecar-is-the-only-resolver
+    decision: Concentrate all token resolution and decryption in the privileged sidecar.
+    rationale: A single auditable enforcement point is easier to isolate, review, and harden than resolution logic spread across SDKs and runtimes — and it is what lets the agent-facing API stay stable while the backend changes.
+    status: accepted
+  - id: socket-request-response
+    decision: Expose resolution to local callers over a Unix domain socket.
+    rationale: It provides a natural authenticated local channel, avoids exposing a network port, and lets the OS enforce filesystem permissions on who may even connect. Long-running local services also need the pipe/socket injection mode anyway.
+    status: accepted
+  - id: no-shared-memory
+    decision: The sidecar shares no memory with agent processes.
+    rationale: The architectural promise is that a compromised agent sandbox does not yield the key; shared memory would reintroduce exactly the surface being eliminated.
+    status: accepted
+
+implementation:
+  primary: apps/sidecar/internal/resolve
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/capability-token"
+  - "smith-gray/secret-injection"
+  - "smith-gray/audit-logging"
+  - "smith-gray/hardware-root"

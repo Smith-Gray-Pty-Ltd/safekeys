@@ -1,0 +1,120 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/encrypted-folder
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  A Safekeys folder is the transport unit: an ordinary directory (or object prefix) holding
+  ciphertext blobs, a manifest, and an agent-readable README with no secrets. Folders can be copied,
+  synced, or passed between agents freely — copying increases no cryptographic exposure, and only a
+  live token plus a reachable sidecar and key authority allow use.
+$system: smith-gray/system
+$service: smith-gray/sidecar
+status: planned
+intent: |
+  Secrets need to move the way artefacts move — through git, object stores, artefacts folders, and
+  agent handoffs — without each hop being a new exposure. Making the transport unit an inert
+  ciphertext container means the risky part of the journey (copying) carries no risk at all, and the
+  only sensitive operation (resolve) is gated by a token and a privileged process.
+
+flows:
+  - id: build-folder
+    name: Build an encrypted folder
+    description: Ciphertext objects plus a manifest are written to a directory or object prefix.
+    steps:
+      - id: s1
+        action: generate
+        target: For each secret, generate a random DEK and encrypt the plaintext into objects/<id>.enc.
+      - id: s2
+        action: generate
+        target: Write manifest.json — object ids, content-type hints, token references, wrapping key ids, and hashes.
+      - id: s3
+        action: generate
+        target: Write README.safekeys describing the folder for humans and agents, containing no secrets.
+      - id: s4
+        action: observe
+        target: The folder is now inert; it can be copied or committed without further protection.
+  - id: copy-folder
+    name: Transport a folder
+    description: A folder is moved between environments or agents with no unwrap occurring.
+    steps:
+      - id: s1
+        action: receive
+        target: Destination receives the folder or object prefix verbatim.
+      - id: s2
+        action: observe
+        target: No unwrap is attempted; no key material is required to hold the copy.
+      - id: s3
+        action: observe
+        target: Cryptographic exposure is unchanged by the copy.
+
+contracts:
+  - id: folder-is-inert
+    description: A folder on its own must be useless without a live token and a reachable key authority.
+    must_have:
+      - Only ciphertext objects, a manifest, and a no-secret README are present
+      - No key material, DEK, or KEK is stored in the folder
+      - Copying the folder does not increase cryptographic exposure
+  - id: manifest-is-metadata-only
+    description: The manifest describes structure and references but never values.
+    must_have:
+      - Object ids, content-type hints, token references, wrapping key ids, and hashes only
+      - No plaintext, no recoverable key bytes
+      - A manifest leaking entirely must not yield any secret
+  - id: readme-is-agent-safe
+    description: The README is deliberately readable by humans and models.
+    must_have:
+      - Explains what the folder is and how to use it
+      - Contains no secrets and no key material
+      - Safe to surface in an agent's context
+
+tests:
+  - id: folder-copy-yields-nothing
+    flow: copy-folder
+    setup:
+      folder_with_secrets: true
+    expect:
+      - assertion: the copied folder contains no plaintext
+      - assertion: reading every file in the folder without a sidecar yields no secret
+    contracts:
+      - folder-is-inert
+  - id: manifest-leak-yields-nothing
+    flow: build-folder
+    setup:
+      manifest_only: true
+    expect:
+      - assertion: no secret is recoverable from manifest.json alone
+      - assertion: wrapping key ids are identifiers, not key material
+    contracts:
+      - manifest-is-metadata-only
+  - id: readme-safe-for-model-context
+    flow: build-folder
+    expect:
+      - assertion: README.safekeys contains no secret values
+      - assertion: pasting README.safekeys into a model context exposes nothing sensitive
+    contracts:
+      - readme-is-agent-safe
+
+decisions:
+  - id: ordinary-directory
+    decision: Use an ordinary directory or object prefix rather than a custom container format.
+    rationale: Any filesystem, object store, or artefact system can carry it with no adapter, and tooling (diff, sync, tar) works unchanged. The security comes from the contents being ciphertext, not from the container.
+    status: accepted
+  - id: aes-gcm-or-chacha
+    decision: Encrypt objects with AES-256-GCM or ChaCha20-Poly1305.
+    rationale: Both are AEAD constructions with wide hardware acceleration and mature library support, giving confidentiality and integrity without bespoke crypto.
+    status: accepted
+  - id: readme-is-a-feature
+    decision: Ship a README.safekeys in every folder, designed to be model-readable.
+    rationale: Agents will encounter folders; a clear, secret-free explanation prevents an agent from attempting to extract values or misusing the folder, and keeps the folder self-describing in handoffs.
+    status: accepted
+
+implementation:
+  primary: apps/sidecar/internal/resolve
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/envelope-encryption"
+  - "smith-gray/secret-transport"
+  - "smith-gray/capability-token"

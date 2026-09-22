@@ -1,0 +1,119 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/token-revocation
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Revocation invalidates a capability token immediately, without waiting for its TTL to expire. A
+  jti denylist checked on every resolve provides the kill switch; short TTL bounds the residual
+  window for anything already in flight. Later phases add device binding, so a lost hardware
+  token is revoked by serial.
+$system: smith-gray/system
+$service: smith-gray/control-plane
+status: planned
+intent: |
+  Short TTLs alone leave an unacceptable window when a token is known to be leaked — minutes to
+  hours of live authority. A denylist gives an operator the immediate kill switch that incident
+  response requires, and the two mechanisms together cover both the slow case (expiry) and the
+  urgent one (revocation).
+
+flows:
+  - id: revoke-token
+    name: Revoke a capability token
+    description: An operator invalidates a specific token by its unique id.
+    steps:
+      - id: s1
+        action: receive
+        target: Operator issues a revoke request for a jti or object id.
+      - id: s2
+        action: validate
+        target: Control plane checks the operator's authority to revoke that object or token.
+      - id: s3
+        action: record
+        target: The jti is added to the denylist and the revoke is recorded in the audit log.
+      - id: s4
+        action: observe
+        target: Every subsequent resolve attempt with that jti is denied.
+  - id: revoke-device
+    name: Revoke a device-bound token (later phase)
+    description: A lost hardware token is revoked by serial.
+    steps:
+      - id: s1
+        action: receive
+        target: Operator revokes a device serial or its associated binding.
+      - id: s2
+        action: record
+        target: The device binding is invalidated at the authority.
+      - id: s3
+        action: observe
+        target: Attestation fails for that device on the next unwrap attempt.
+
+contracts:
+  - id: immediate-effect
+    description: Revocation must take effect without waiting for token expiry.
+    must_have:
+      - The denylist is consulted on every resolve
+      - No caching path can serve a revoked token
+      - Effect is observable on the next resolve attempt
+  - id: revoke-is-audited
+    description: Revocation is itself an auditable event.
+    must_have:
+      - The revoking principal, target, and timestamp are recorded
+      - The audit record survives in the append-only log
+      - Revocations are queryable alongside resolve history
+  - id: device-revocation-by-serial
+    description: In the hardware phase, a lost device can be revoked by its serial.
+    must_have:
+      - Device identity is bound at provisioning
+      - Revocation invalidates the binding at the authority
+      - No re-provisioning of the same serial without operator action
+
+tests:
+  - id: revoked-token-denied-on-next-resolve
+    flow: revoke-token
+    setup:
+      ttl_seconds: 3600
+      revoke_before_use: true
+    expect:
+      - assertion: the next resolve with that jti is denied
+      - assertion: denial occurs well before expiry
+    contracts:
+      - immediate-effect
+  - id: revocation-recorded
+    flow: revoke-token
+    setup:
+      valid_token: true
+    expect:
+      - assertion: an audit record exists for the revocation
+      - assertion: it names the revoking principal and the target
+    contracts:
+      - revoke-is-audited
+  - id: no-cache-serves-revoked-token
+    flow: revoke-token
+    setup:
+      resolved_once_before_revocation: true
+    expect:
+      - assertion: a previously successful resolve does not make the token reusable
+      - assertion: no in-memory cache bypasses the denylist
+    contracts:
+      - immediate-effect
+
+decisions:
+  - id: denylist-plus-ttl
+    decision: Use a jti denylist alongside short TTLs rather than one or the other.
+    rationale: TTL handles the unattended case cheaply and bounds worst-case exposure; the denylist handles the attended, urgent case. Neither alone is sufficient — long TTLs make leaks linger, and denylists alone still require knowing about the leak.
+    status: accepted
+  - id: authoritative-check-at-resolve
+    decision: Check revocation at resolve time in the sidecar rather than trusting token validity alone.
+    rationale: The sidecar is the enforcement point; if revocation is not checked there, a revoked token still works wherever it is presented.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/token
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/capability-token"
+  - "smith-gray/audit-logging"
+  - "smith-gray/hardware-root"

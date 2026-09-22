@@ -1,0 +1,137 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/audit-logging
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Every resolution is recorded — who, what scope, which jti, which host — without ever logging the
+  secret. The audit log is append-only, captures denials as well as successes, and is the evidence
+  trail that makes a security review and an incident response possible.
+$system: smith-gray/system
+$service: smith-gray/control-plane
+status: planned
+intent: |
+  A system that promises "the model never sees secrets" must be able to prove what happened without
+  becoming a new place where secrets leak. An append-only record of identifiers and outcomes gives
+  operators the accountability they need — including visibility of denials, which is often the first
+  signal of an attack — while remaining worthless to anyone who steals it.
+
+flows:
+  - id: record-resolve
+    name: Record a resolution attempt
+    description: The sidecar reports each attempt to the audit log, successful or denied.
+    steps:
+      - id: s1
+        action: observe
+        target: Sidecar completes a resolve attempt with an outcome.
+      - id: s2
+        action: send
+        target: Sidecar sends the record to the control plane — requester, scope, jti, object id, host, outcome, timestamp.
+      - id: s3
+        action: record
+        target: Control plane appends the record; no plaintext is present in the payload.
+      - id: s4
+        action: observe
+        target: The record is queryable but not modifiable.
+  - id: query-audit
+    name: Query the audit log
+    description: An operator or auditor reviews resolution history.
+    steps:
+      - id: s1
+        action: authenticate
+        target: Caller authenticates with auditor or operator credentials.
+      - id: s2
+        action: send
+        target: Query by object, jti, principal, host, outcome, or time range.
+      - id: s3
+        action: receive
+        target: Matching records are returned; values are absent by construction.
+
+contracts:
+  - id: zero-plaintext-in-audit
+    description: Audit records must never contain plaintext or key material.
+    must_have:
+      - Records carry identifiers and outcomes only
+      - No record contains a secret value, DEK, or KEK
+      - Stealing the entire audit log yields no secret
+  - id: append-only
+    description: Audit records cannot be altered or deleted through the application.
+    must_have:
+      - No update or delete endpoint exists for audit records
+      - Records are immutable once written
+      - Storage is retained according to policy
+  - id: denials-recorded
+    description: Failed attempts are recorded alongside successful ones.
+    must_have:
+      - Denied resolves are written with a denial outcome
+      - Denial records name the requester and target
+      - Denial-rate analysis is possible from the log alone
+  - id: complete-attribution
+    description: A record is sufficient to answer who used what, where, and when.
+    must_have:
+      - Requester identity, scope, jti, object id, host, outcome, and timestamp present
+      - Records join to the issuance event for the token
+      - No record is ambiguous about which object was involved
+
+tests:
+  - id: audit-contains-no-plaintext
+    flow: record-resolve
+    setup:
+      secret_value: "audit-test-secret"
+    expect:
+      - assertion: no audit record contains the secret value
+      - assertion: no record contains key material
+    contracts:
+      - zero-plaintext-in-audit
+  - id: audit-is-immutable
+    flow: query-audit
+    setup:
+      attempt_mutation: true
+    expect:
+      - assertion: no endpoint permits updating or deleting a record
+      - assertion: attempts to mutate are rejected
+    contracts:
+      - append-only
+  - id: denials-are-recorded
+    flow: record-resolve
+    setup:
+      valid_token: false
+    expect:
+      - assertion: a record exists with a denial outcome
+      - assertion: the record identifies the requester and target
+    contracts:
+      - denials-recorded
+  - id: attribution-complete
+    flow: record-resolve
+    setup:
+      valid_token: true
+      injection_method: inject-env
+    expect:
+      - assertion: the record contains requester, scope, jti, object id, host, and timestamp
+      - assertion: the record joins to the token issuance event
+    contracts:
+      - complete-attribution
+
+decisions:
+  - id: metadata-only-logging
+    decision: Log identifiers and outcomes, never values or key material.
+    rationale: The audit log is a high-value target precisely because it is central and long-lived. Keeping it metadata-only means a breach of the log is an accountability problem, not a secret-disclosure one.
+    status: accepted
+  - id: record-denials
+    decision: Record denied attempts as first-class events.
+    rationale: Denials are frequently the earliest evidence of misuse or a probing attack, and an audit log that only shows successes hides the signal an incident responder most needs.
+    status: accepted
+  - id: append-only-by-construction
+    decision: Provide no mutation path for audit records rather than relying on access control alone.
+    rationale: A capability that does not exist cannot be misconfigured. Immutability by construction is stronger than immutability by policy.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/audit
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/sidecar-resolution"
+  - "smith-gray/control-plane-api"
+  - "smith-gray/token-revocation"

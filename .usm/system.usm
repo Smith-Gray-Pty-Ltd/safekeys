@@ -1,0 +1,397 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/system
+$type: system
+$version: 1
+$last_updated: "2026-09-22"
+version: "0.1.0"
+status: planned
+summary: |
+  Safekeys.ai — encrypted transport for secrets through environments, agentic flows, and LLM systems, designed so plaintext is never exposed to any model. Secrets are treated as movable encrypted objects (ciphertext folders) plus opaque capability tokens; a privileged local sidecar resolves them outside the LLM process. The agent-facing interface is stable as the backend hardens from software isolation to hardware and threshold cryptography.
+
+identity:
+  name: Safekeys
+  domain: safekeys.ai
+  contact: james@smith-gray.com
+  repository: https://github.com/Smith-Gray-Pty-Ltd/safekeys
+
+principles:
+  - key: never-on-decrypt-path
+    name: The LLM is never on the decryption path
+    statement: No language model ever holds, receives, or can derive plaintext secret material or long-term keys.
+    rationale: Once an LLM has seen a value, that session — and the logs, traces, and memory around it — is compromised. This is the product's reason to exist.
+    implications:
+      - Agents may only receive tokens, folder paths, ciphertext, metadata, and success/deny status
+      - Resolution happens in a privileged sidecar, never in the model process
+      - Create-secret flows never round-trip plaintext through model context
+  - key: opaque-capability
+    name: Agents see only opaque capability tokens
+    statement: The only secret-bearing artefact an agent reasons about is a short-lived, scoped, audience-bound capability token containing zero secret material.
+    rationale: A token is safe to pass through prompts, memory, tool calls, and multi-agent buses where a value is not.
+    implications:
+      - Tokens are short TTL (minutes to hours), scoped, and audience-bound
+      - Revocation is immediate via jti denylist plus short TTL
+  - key: stable-agent-interface
+    name: Stable agent-facing interface
+    statement: The public interface (tokens plus folders) stays constant as backends harden from software isolation to hardware to threshold crypto.
+    rationale: Agent frameworks, runtimes, and customers integrate once and inherit later hardening without rewrites.
+    implications:
+      - MVP is software-only and already meets the product promise
+      - Hardware, threshold crypto, and post-quantum ratchets land behind the same API
+  - key: materialise-then-zeroise
+    name: Plaintext is materialised only for the consumer, then zeroised
+    statement: Plaintext exists only transiently inside the sidecar's injection path for the consuming non-LLM process, and is zeroised immediately after use.
+    rationale: Minimises the window and the surface where a live secret value exists.
+    implications:
+      - Prefer exec-wrapper and env injection over returning values on an agent's stdout
+      - Sidecar holds transient unwrapped data keys, never long-term master keys in the hardware phase
+  - key: open-core-protocol
+    name: Open protocol, commercial authority
+    statement: Token and folder specifications, the sidecar reference implementation, CLI, and core SDKs are open source; the hosted authority, hardware, and enterprise controls are commercial.
+    rationale: Security tooling requiring deep trust wins adoption when the foundational pieces are auditable — the Let's Encrypt model — while revenue sits on hosted authority, hardware, and enterprise controls.
+    implications:
+      - Public core is Apache-2.0 (explicit patent grant matters for crypto)
+      - Control plane and hardware provisioning remain proprietary or BSL
+      - No AGPL/SSPL on the sidecar or SDKs — it scares agent-framework maintainers
+
+roles:
+  - name: Agent Developer
+    description: Engineers building agents who need secrets in tool calls and runtimes without exposing them to the model.
+    needs:
+      - Token-only SDKs and MCP tools they can adopt without bespoke crypto
+      - Clear integration path (MCP, CLI exec, Python SDK)
+  - name: Security Engineer
+    description: The person who must approve Safekeys for production and reason about the threat model.
+    needs:
+      - Auditable trust boundaries and the open protocol specification
+      - Explicit statement of what is and is not mitigated at each phase
+  - name: Platform / SRE Operator
+    description: Runs the sidecar fleet, control plane, and key store in the customer's environments.
+    needs:
+      - Install and infrastructure requirements, key store integration
+      - Audit log access and revocation tooling
+  - name: AI Coding Agent
+    description: An automated agent working in this repository, which must consult specs before changing code.
+    needs:
+      - Machine-readable contracts and flows per feature
+      - A stable system map to locate the governing spec
+
+services:
+  - id: control-plane
+    name: Control Plane API
+    ref: apps/control-plane
+    port: 8080
+    type: api
+    depends_on:
+      - key-store
+      - postgres
+  - id: sidecar
+    name: Sidecar / Resolver
+    ref: apps/sidecar
+    port: 0
+    type: worker
+    depends_on:
+      - control-plane
+      - key-store
+  - id: cli
+    name: Safekeys CLI
+    ref: apps/cli
+    port: 0
+    type: api
+    depends_on:
+      - sidecar
+      - control-plane
+  - id: safekeys
+    name: Safekeys.ai Site
+    ref: apps/safekeys
+    port: 3000
+    type: web-app
+    depends_on: []
+  - id: mcp-server
+    name: Safekeys MCP Server
+    ref: packages/mcp-server
+    port: 0
+    type: shared
+    depends_on:
+      - cli
+  - id: python-sdk
+    name: Python SDK
+    ref: packages/sdk-python
+    port: 0
+    type: shared
+    depends_on:
+      - cli
+  - id: typescript-sdk
+    name: TypeScript SDK
+    ref: packages/sdk-typescript
+    port: 0
+    type: shared
+    depends_on:
+      - cli
+  - id: key-store
+    name: Key Store (OpenBao / Vault)
+    ref: https://openbao.org
+    type: external
+    depends_on: []
+  - id: postgres
+    name: Postgres
+    ref: https://www.postgresql.org
+    type: database
+    depends_on: []
+
+apis:
+  - id: control-plane-api
+    name: Safekeys Control Plane API
+    ref: apps/control-plane
+
+auth_schemes:
+  - id: control-plane-api-key
+    type: api-key
+    description: Client credential used by the sidecar and CLI to authenticate to the control plane in the MVP.
+    config_ref: docs/help/control-plane-auth.md
+  - id: sidecar-mtls
+    type: oauth2
+    description: Mutual TLS device identity between sidecar and control plane, introduced alongside hardware binding.
+    config_ref: docs/help/control-plane-auth.md
+  - id: local-sidecar-socket
+    type: none
+    description: Local authenticated channel (Unix domain socket) between an agent/CLI and the sidecar on the same host.
+
+infrastructure:
+  cloud: customer-hosted or hosted control plane
+  region: ""
+  terraform_ref: ""
+  dns: safekeys.ai
+  ssl: managed TLS at the edge
+
+deployment:
+  environments:
+    - name: dev
+      url: http://localhost:8080
+      type: local
+    - name: site
+      url: https://safekeys.ai
+      type: production
+  notes: |
+    MVP operator footprint: 2–3 small VMs or one small Kubernetes namespace, managed Postgres,
+    OpenBao/Vault on a hardened VM, API keys plus mTLS for sidecars. Low hundreds of USD per month
+    at early stage. Customer install is a single sidecar binary or container plus a control-plane URL
+    and client credential.
+
+operations:
+  monitoring: Prometheus metrics from the sidecar and control plane — resolution latency and deny rates.
+  alerts: Deny-rate spikes and key-store reachability.
+  on_call: Single team in MVP.
+
+security_stack:
+  first_line: Capability token verification — signature, expiry, audience, and policy checks at the sidecar.
+  last_line: Envelope encryption with a key store holding wrapped keys; plaintext never persisted.
+  notes: |
+    The threat model is explicit about what is deferred: a fully compromised secure element plus all
+    threshold shares, or a human pasting plaintext into a chat, remain out of scope even after Phase 3.
+
+testing_strategy:
+  automated_testing: Per-service unit and integration tests, plus a two-agent demo test asserting neither transcript contains plaintext.
+  security_testing: Prompt-injection and stolen-token abuse cases asserted against the sidecar.
+  ci_integration: usm generate --check plus per-service lint, typecheck, and test on the affected modules.
+
+non_functional:
+  performance:
+    target: Resolution and injection under 50ms p95 locally, excluding key-store unwrap latency.
+    description: The sidecar sits on the hot path for tool calls, so resolution must stay cheap.
+  scalability:
+    target: Single sidecar per decrypting environment; control plane scales horizontally behind Postgres.
+  security:
+    target: Compromise of the model, the agent sandbox, or the sidecar must not yield the long-term key.
+    description: Architectural in the MVP; cryptographic plus hardware in later phases.
+  reliability:
+    target: Deny-by-default when the key store or control plane is unreachable.
+    description: A failed resolution must never fall back to plaintext or a cached value.
+  maintainability:
+    target: Agent-facing API unchanged across software, hardware, and threshold phases.
+
+index:
+  - id: protocol-capability-token
+    name: Capability Token
+    ref: .usm/features/protocol/capability-token.usm
+    status: planned
+    tags: [protocol, crypto, token, mvp]
+  - id: protocol-encrypted-folder
+    name: Encrypted Folder Format
+    ref: .usm/features/protocol/encrypted-folder.usm
+    status: planned
+    tags: [protocol, crypto, folder, mvp]
+  - id: protocol-envelope-encryption
+    name: Envelope Encryption
+    ref: .usm/features/protocol/envelope-encryption.usm
+    status: planned
+    tags: [protocol, crypto, kms, mvp]
+  - id: resolution-sidecar
+    name: Sidecar Resolution
+    ref: .usm/features/resolution/sidecar-resolution.usm
+    status: planned
+    tags: [sidecar, mvp, security]
+  - id: resolution-injection
+    name: Secret Injection Interfaces
+    ref: .usm/features/resolution/secret-injection.usm
+    status: planned
+    tags: [sidecar, injection, mvp]
+  - id: resolution-exec-wrapper
+    name: Exec Wrapper
+    ref: .usm/features/resolution/exec-wrapper.usm
+    status: planned
+    tags: [cli, injection, mvp]
+  - id: lifecycle-creation
+    name: Secret Creation
+    ref: .usm/features/lifecycle/secret-creation.usm
+    status: planned
+    tags: [lifecycle, mvp]
+  - id: lifecycle-transport
+    name: Secret Transport
+    ref: .usm/features/lifecycle/secret-transport.usm
+    status: planned
+    tags: [lifecycle, mvp, agents]
+  - id: lifecycle-revocation
+    name: Token Revocation
+    ref: .usm/features/lifecycle/token-revocation.usm
+    status: planned
+    tags: [lifecycle, security, mvp]
+  - id: control-plane-api
+    name: Control Plane API
+    ref: .usm/features/control-plane/control-plane-api.usm
+    status: planned
+    tags: [control-plane, api, mvp]
+  - id: control-plane-audit
+    name: Audit Logging
+    ref: .usm/features/control-plane/audit-logging.usm
+    status: planned
+    tags: [control-plane, audit, mvp]
+  - id: control-plane-policy
+    name: Policy Engine
+    ref: .usm/features/control-plane/policy-engine.usm
+    status: planned
+    tags: [control-plane, policy, mvp]
+  - id: integration-python-sdk
+    name: Python Agent SDK
+    ref: .usm/features/integration/python-sdk.usm
+    status: planned
+    tags: [sdk, mvp, agents]
+  - id: integration-mcp-server
+    name: MCP Server
+    ref: .usm/features/integration/mcp-server.usm
+    status: planned
+    tags: [mcp, mvp, agents]
+  - id: hardening-hardware-root
+    name: Hardware Root of Trust
+    ref: .usm/features/hardening/hardware-root.usm
+    status: planned
+    tags: [hardening, hardware, phase-1]
+  - id: hardening-threshold-crypto
+    name: Threshold and Post-Quantum Hardening
+    ref: .usm/features/hardening/threshold-crypto.usm
+    status: planned
+    tags: [hardening, crypto, phase-2]
+
+roadmap:
+  - id: phase-0-mvp
+    title: "Phase 0 — Software MVP"
+    description: Software-only sidecar, control plane, folder format, CLI, and one SDK. Already meets the product promise — models never see secrets.
+    status: planned
+  - id: phase-1-hardware
+    title: "Phase 1 — Hardware root of trust"
+    description: Move the long-term share out of ordinary RAM onto TPM 2.0, cloud confidential computing, USB token, or a discrete secure element. Factory-provisioned devices can be drop-shipped.
+    status: planned
+  - id: phase-2-threshold
+    title: "Phase 2 — Threshold and post-quantum"
+    description: Split knowledge between secure element and authority, ephemeral reconstruction only inside the element, hybrid classical plus ML-KEM ratchet, remote attestation before unwrap.
+    status: planned
+  - id: phase-3-high-assurance
+    title: "Phase 3 — High assurance"
+    description: Certified tokens, PUF binding, proactive secret sharing, formally verified critical path, courier-grade root material. Not required to launch.
+    status: planned
+
+risks:
+  - id: rooted-os
+    title: Rooted OS or compromised local agent process
+    description: A fully compromised host can attempt to observe or interfere with the sidecar's resolution path.
+    severity: high
+    status: identified
+    mitigation: Process isolation in the MVP; secure element, TEE, or TPM binding in Phase 1. Plaintext remains transient and zeroised.
+  - id: stolen-token
+    title: Stolen or replayed capability token
+    description: A token copied out of a prompt, memory, or log could be replayed by an attacker within its lifetime.
+    severity: medium
+    status: identified
+    mitigation: Short TTL, audience binding, scope least-privilege, jti denylist revocation, and optional mTLS device identity.
+  - id: provider-kms-exposure
+    title: Multi-tenant AI-cloud KMS used as the root
+    description: Using a provider KMS that the model provider itself can access would re-introduce model-side exposure of the root of trust.
+    severity: high
+    status: mitigated
+    mitigation: Do not use multi-tenant AI-cloud KMS as root. Self-hosted key store, then HSM or secure element.
+  - id: quantum-harvest-now
+    title: Harvest-now-decrypt-later against long-lived ciphertext
+    description: Folders may be copied and stored indefinitely, so classical-only key wrapping is exposed to future quantum capability.
+    severity: medium
+    status: accepted
+    mitigation: Explicitly not an MVP concern. Hybrid KEM and ratchet in Phase 2.
+  - id: human-pastes-plaintext
+    title: A human pastes plaintext into a chat
+    description: No architecture can prevent a person from pasting a secret into a model conversation.
+    severity: high
+    status: accepted
+    mitigation: Out of scope even in later phases. The product exists to make this unnecessary, not to detect it.
+
+assumptions:
+  - MVP is software-only and already satisfies "models never see secrets" without custom silicon.
+  - Customers will accept a single sidecar binary or container per decrypting environment.
+  - OpenBao or Vault Transit/KV is an acceptable key store for the MVP.
+  - Agent frameworks will integrate via MCP, CLI exec wrapper, or the Python SDK rather than bespoke runtimes.
+  - The agent-facing API must not change as the backend hardens.
+
+stakeholders:
+  - name: James A Birrell Gray
+    role: Product Owner / Founder
+    contact: james@smith-gray.com
+  - name: Smith-Gray Pty Ltd
+    role: Company / IP holder
+    contact: https://github.com/Smith-Gray-Pty-Ltd
+
+agent_context: |
+  ## Critical distinctions
+
+  - **Safekeys is a transport and mediation layer, not a secret manager.** It is not a replacement for
+    general-purpose secret managers in human or CI use cases that do not involve models. Ciphertext
+    folders travel freely; capability tokens authorise use; the sidecar is the only component allowed
+    to resolve a token.
+  - **There are two "secret" objects and they must not be confused.** A *capability token* is
+    agent-visible, contains zero secret material, and is safe to pass through prompts. A *folder* is
+    ciphertext plus a manifest. Neither is plaintext.
+  - **The sidecar is privileged.** It runs as a different user from the agent, with seccomp/AppArmor
+    confinement and no shared memory with agent processes.
+  - **Create flows do not go through the model.** Plaintext travels from the caller to the sidecar over
+    a local authenticated channel; only a token is returned to the agent.
+
+  ## Not in scope for the MVP
+
+  Secure elements and drop-shipped hardware, threshold/PUF/post-quantum ratchets, the Windows sidecar,
+  a full web console, multi-party key authority.
+
+conventions:
+  - "Conventional commits: feat(scope), fix(scope), docs(scope)"
+  - "The LLM is never on the decryption path — no exception, including tests and demos"
+  - "Never log plaintext, or unwrapped keys"
+  - "Prefer exec-wrapper and env injection over returning values on an agent's stdout"
+  - "Follow the spec-first workflow in AGENTS.md before changing code"
+
+mandatory_reading:
+  - path: AGENTS.md
+    description: Agent workflow, USM spec-first rules, and the feedback protocol.
+  - path: .usm/system.usm
+    description: System identity, principles, services, and threat model.
+
+policies:
+  refs:
+    - docs/help/security-model.md
+
+feedback:
+  policy: human-gate

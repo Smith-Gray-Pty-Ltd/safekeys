@@ -1,0 +1,60 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/safekeys
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Safekeys.ai Site — the public marketing and documentation presence at safekeys.ai, explaining the encrypted transport model, the open protocol, and the "Secrets move. Models don't see." positioning. It is the adoption front door for the open core.
+
+$system: smith-gray/system
+name: Safekeys.ai Site
+status: planned
+type: web-app
+runtime: nextjs
+port: 3000
+paths:
+  - apps/safekeys
+depends_on: []
+
+tech_stack:
+  framework: Next.js
+  styling: Tailwind CSS
+  hosting: static or edge deploy
+  docs: open protocol specification and getting-started guides
+
+dev:
+  command: "npm run dev"
+  url: "http://localhost:3000"
+  env: {}
+
+prod:
+  url: "https://safekeys.ai"
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: vitest
+  command: "npm test --workspace apps/safekeys"
+  coverage_target: "70%"
+
+security:
+  auth_method: none (public marketing site)
+  secrets_ref: ""
+
+modules:
+  - name: site
+    purpose: Landing page, positioning, and protocol overview
+    paths: [apps/safekeys/app]
+
+risks:
+  - "Public messaging must not overstate the MVP's guarantees; the threat model page is the source of truth for what is and is not mitigated."
+
+future:
+  - "Interactive protocol explorer for tokens and folders."
+  - "Hosted documentation portal for the open core."
+
+decisions:
+  - id: open-protocol-wedge
+    decision: Position the site around the open protocol as the adoption wedge, with hardware and hosted authority as the commercial layer.
+    rationale: "The Let's Encrypt analogy from the blueprint — security tooling that requires deep trust wins adoption when the foundational pieces are auditable, while revenue sits on hosted authority, hardware, and enterprise controls."
+    status: accepted

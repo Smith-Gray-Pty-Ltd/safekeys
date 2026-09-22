@@ -1,0 +1,153 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/hardware-root
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Phase 1 hardening moves the long-term key share out of ordinary RAM and into a hardware root of
+  trust. Options are ordered cheapest first — existing TPM 2.0, cloud confidential computing, a USB
+  token or discrete secure-element dongle (~$15–35), or a soldered secure element ($1–3 chip). The
+  sidecar talks to the device; the LLM never does. Devices can be factory-provisioned and
+  drop-shipped.
+$system: smith-gray/system
+$service: smith-gray/sidecar
+status: planned
+intent: |
+  In the software-only MVP the promise holds architecturally, but a rooted host can still attack the
+  sidecar's memory. Hardware moves the key to a boundary an operating-system compromise cannot cross,
+  and because the agent-facing API does not change, customers adopt it without rewriting anything.
+
+flows:
+  - id: bind-device
+    name: Bind a hardware root to an environment
+    description: A device is provisioned and bound to customer policy on first plug-in.
+    steps:
+      - id: s1
+        action: setup
+        target: Device is factory-provisioned with identity, an attestation key, and a locked applet.
+      - id: s2
+        action: authenticate
+        target: First plug-in performs mutual attestation between the device and the key authority.
+      - id: s3
+        action: validate
+        target: The binding is recorded against customer policy in the control plane.
+      - id: s4
+        action: observe
+        target: The sidecar now performs unwrap operations through the device.
+  - id: unwrap-via-device
+    name: Unwrap through the hardware boundary
+    description: The device performs or gates the unwrap so key material never enters host RAM.
+    steps:
+      - id: s1
+        action: send
+        target: Sidecar sends the unwrap request to the device.
+      - id: s2
+        action: validate
+        target: The device checks that the request is authorised by policy and device state.
+      - id: s3
+        action: observe
+        target: The long-term share never leaves the device boundary.
+      - id: s4
+        action: delete
+        target: The device zeroises transient material and any tamper response wipes state.
+  - id: revoke-device
+    name: Revoke a lost device
+    description: A lost or stolen device is revoked by serial.
+    steps:
+      - id: s1
+        action: receive
+        target: Operator revokes the device serial at the authority.
+      - id: s2
+        action: record
+        target: The binding is invalidated and the revocation is audited.
+      - id: s3
+        action: observe
+        target: Attestation fails for that device on any subsequent unwrap attempt.
+
+contracts:
+  - id: key-not-in-host-ram
+    description: In the hardware phase the long-term share must not exist in general-purpose host memory.
+    must_have:
+      - Unwrap occurs at or behind the device boundary
+      - The sidecar never receives the long-term share
+      - An OS-level compromise cannot extract the share
+  - id: agent-api-unchanged
+    description: Adding hardware must not change the agent-facing interface.
+    must_have:
+      - Tokens and folders are unchanged
+      - No SDK or MCP tool change is required
+      - Only the sidecar's backend configuration changes
+  - id: attestation-before-unwrap
+    description: The device proves its identity and state before any unwrap.
+    must_have:
+      - Mutual attestation occurs at binding and on unwrap
+      - A failed attestation denies the operation
+      - Binding is recorded against customer policy
+  - id: tamper-and-loss-handling
+    description: Physical compromise and device loss both fail closed.
+    must_have:
+      - Tamper response zeroises device state
+      - Lost devices are revocable by serial
+      - Revocation takes effect at the authority
+
+tests:
+  - id: share-absent-from-host
+    flow: unwrap-via-device
+    setup:
+      device: "tpm2"
+    expect:
+      - assertion: the long-term share is not present in the sidecar's process memory
+      - assertion: unwrap succeeds through the device boundary
+    contracts:
+      - key-not-in-host-ram
+  - id: api-unchanged-with-hardware
+    flow: unwrap-via-device
+    setup:
+      same_tokens_as_mvp: true
+    expect:
+      - assertion: token and folder formats are identical to the software phase
+      - assertion: client SDKs require no modification
+    contracts:
+      - agent-api-unchanged
+  - id: failed-attestation-denies
+    flow: bind-device
+    setup:
+      attestation: "fail"
+    expect:
+      - assertion: the operation is denied
+      - assertion: no unwrap occurs
+    contracts:
+      - attestation-before-unwrap
+  - id: lost-device-revocable-by-serial
+    flow: revoke-device
+    setup:
+      device_serial: "SE-0001"
+    expect:
+      - assertion: the device binding is invalidated
+      - assertion: subsequent unwrap attempts fail attestation
+    contracts:
+      - tamper-and-loss-handling
+
+decisions:
+  - id: cheapest-option-first
+    decision: "Order hardware options cheapest first: TPM 2.0, cloud confidential computing, USB token or dongle, soldered secure element."
+    rationale: TPM 2.0 exists in most enterprise hardware at no extra cost and confidential computing needs no physical device, so the first hardening step can be free. Physical devices are reserved for environments that need them.
+    status: accepted
+  - id: drop-shipped-provisioning
+    decision: Support factory-provisioned devices that are drop-shipped to customers.
+    rationale: Provisioning identity, an attestation key, and a locked applet before shipping makes deployment plug-and-play and enables the hardware business line in the open-core split.
+    status: accepted
+  - id: no-custom-silicon-day-one
+    decision: Do not require custom silicon for the MVP or Phase 1.
+    rationale: The blueprint's non-goal is explicit — requiring bespoke silicon on day one would block adoption of a product whose software phase already delivers the core promise.
+    status: accepted
+
+implementation:
+  primary: apps/sidecar/internal/verify
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/envelope-encryption"
+  - "smith-gray/sidecar-resolution"
+  - "smith-gray/threshold-crypto"

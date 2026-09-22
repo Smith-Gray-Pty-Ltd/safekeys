@@ -1,0 +1,120 @@
+# Claude Code Instructions
+
+
+<!-- USM:START -->
+## Project: Safekeys
+
+Safekeys.ai — encrypted transport for secrets through environments, agentic flows, and LLM systems, designed so plaintext is never exposed to any model. Secrets are treated as movable encrypted objects (ciphertext folders) plus opaque capability tokens; a privileged local sidecar resolves them outside the LLM process. The agent-facing interface is stable as the backend hardens from software isolation to hardware and threshold cryptography.
+
+
+## Services
+
+- **Safekeys CLI** (api, go)
+  Safekeys CLI — the operator and agent-facing command line (safekeys create, exec, revoke, list). It talks to the local sidecar over the Unix socket and to the control plane for token lifecycle, never handling plaintext except on the create path where it writes directly to the sidecar.
+- **Control Plane API** (api, go)
+  Control Plane API — issues and revokes capability tokens, manages policy, and exposes the audit log. It never receives plaintext secrets. Built in Go on Postgres, authenticating sidecars and CLIs via API key in the MVP and mTLS later.
+- **Safekeys MCP Server** (api, node)
+  Safekeys MCP Server — the highest-leverage MVP integration. One MCP server exposes Safekeys tools to every MCP-capable agent runtime (Claude, Cursor, Codex, Gemini), so agents can create and use secrets without per-vendor SDK work. Agents receive only tokens, paths, and status.
+- **Python SDK** (api, python)
+  Python Agent SDK — a token-only client for agents building secret workflows (LangChain and LangGraph tools first). It exposes create_secret and resolve_for_tool, and by construction cannot return plaintext to the caller: it only ever returns capability tokens and folder paths.
+- **Safekeys.ai Site** (web-app, nextjs)
+  Safekeys.ai Site — the public marketing and documentation presence at safekeys.ai, explaining the encrypted transport model, the open protocol, and the "Secrets move. Models don't see." positioning. It is the adoption front door for the open core.
+- **Sidecar / Resolver** (worker, go)
+  Sidecar / Resolver — the only component permitted to resolve a capability token. It validates tokens, requests data-key unwrap from the key store, injects plaintext into a non-LLM consumer, and zeroises. Written in Go, it runs as a separate user from agents with seccomp/AppArmor confinement and no shared memory.
+- **TypeScript SDK** (api, node)
+  TypeScript SDK — the Node-side counterpart to the Python SDK, targeting Mastra, Vercel AI SDK, and OpenAI Agents SDK customers. Identical token-only API surface: accept and return capability tokens and folder paths, never plaintext.
+
+## Available MCP Tools
+
+**Read tools** (query existing .usm data):
+- `usm_list` — list all .usm files
+- `usm_read` — read a specific .usm file
+- `usm_search` — search .usm files by keyword
+- `usm_query` — predicate query over all .usm files (e.g. "features where status = planned and contracts = 0")
+- `usm_validate` — validate a .usm file against schema
+- `usm_summary` — quick summary of a .usm file
+- `usm_references` — find references to a feature $id
+- `usm_get_contracts` — get contracts from a feature
+- `usm_get_flows` — get flows from a feature
+
+**Write tools** (author and update .usm files):
+- `usm_draft_feature` — draft a feature spec (returns YAML + markdown preview)
+- `usm_write_feature` — write a feature .usm file to disk (validates first)
+- `usm_update_feature` — update fields on an existing feature (id-bearing arrays merge by id)
+- `usm_update_feature_status` — update feature status (planned→built)
+- `usm_write_system` — create or replace system.usm (validates $type: system)
+- `usm_write_service` — create or replace a service .usm file
+- `usm_update_system` — update fields on system.usm (services/index/roles merge by id)
+- `usm_update_service` — update fields on a service file (data_models/routes merge by id)
+- `usm_report_feedback` — report a bug/improvement (scope-aware: project vs USM tool upstream)
+
+## USM Spec-First Workflow
+
+This project uses USM (Universal System Map) for structured system documentation.
+Follow this workflow when implementing features:
+
+### Before Starting Work
+1. Use MCP tools to read the system map:
+   - `usm_list` to see all .usm files
+   - `usm_read` to read a specific feature or service
+   - `usm_search` to find features by keyword
+   - `usm_query` to run predicate queries ("features where status = planned and contracts = 0")
+   - `usm_summary` for a quick overview
+
+### When Implementing a New Feature
+1. Discuss the feature with the human
+2. Call `usm_draft_feature` with structured fields (summary, intent, flows, contracts, tests)
+3. Show the human the generated markdown preview for review
+4. If approved, call `usm_write_feature` to persist the .usm file
+5. Implement the feature in code
+6. Call `usm_update_feature_status` to mark as built (with implementation path)
+
+### When Updating an Existing Feature
+1. Read the existing .usm spec first (`usm_read`)
+2. Make code changes
+3. Call `usm_update_feature` if the spec needs updating (id-bearing arrays merge by id)
+4. Call `usm_update_feature_status` if status changed
+
+### When Bootstrapping or Updating System/Service Specs
+1. Use `usm_write_system` to create or replace system.usm
+2. Use `usm_update_system` to add services, roles, or auth_schemes (merges by id)
+3. Use `usm_write_service` to create a service file (e.g. .usm/apps/my-app/service.usm)
+4. Use `usm_update_service` to update service fields (data_models, routes merge by id)
+
+### Key Rules
+- NEVER create .usm files by hand — use the MCP write tools (they validate)
+- ALWAYS show the human the markdown before writing to disk
+- ALWAYS update feature status after implementation
+- The .usm file IS the documentation — if it's wrong, the docs are wrong
+- Use `usm_query` for impact analysis ("what depends on this service?")
+
+## Agent Feedback Protocol
+
+> **If you are an AI agent, read this.** When you discover a bug, inconsistency, or improvement, first classify WHERE it lives (below), then follow this project's configured policy — do NOT improvise or invent your own tracking files.
+
+### Step 1 — Where does the bug live?
+
+| Scope | Covers | Where it goes |
+|-------|--------|---------------|
+| **This project** | App code, infra, this repo's own `.usm` specs | Step 2 below — this project's policy |
+| **The USM tool itself** | `@smithgray/usm` CLI commands, MCP tool behaviour, generator output, schema validation | Upstream: <https://github.com/Smith-Gray-Pty-Ltd/usm/issues> |
+
+USM tool bugs are NOT this project's bugs. Include the `@smithgray/usm` version (`npm ls @smithgray/usm`), the command or MCP tool invoked, reproduction steps, and expected vs actual.
+For a USM tool bug: describe it to the human and **ask** whether to file it upstream (they may prefer to file it themselves).
+**Never** file USM tool bugs in this project's tracker (<https://github.com/Smith-Gray-Pty-Ltd/safekeys/issues>) or in `.usm/feedback/` — they will not be seen by anyone who can fix them.
+
+### Step 2 — This project's policy (for project-scope issues)
+
+**Active policy:** `human-gate`
+
+- Surface the issue to the human in conversation. Describe what you found and **ask** whether to record or file it.
+- Do **NOT** write any feedback file, create an issue, or commit a fix without explicit human approval.
+
+**Hard rules (all policies):**
+- **NEVER** create ad-hoc tracking files at the repo root (`bugs.md`, `ISSUES.md`, `TODO-agent.md`, etc.).
+- The **only** canonical location for structured project feedback is `.usm/feedback/`.
+- Real bugs in this project live in the issue tracker: <https://github.com/Smith-Gray-Pty-Ltd/safekeys/issues>.
+- Real bugs in the **USM tool itself** live upstream: <https://github.com/Smith-Gray-Pty-Ltd/usm/issues> — never in this repo.
+- If ever unsure, default to asking the human.
+
+<!-- USM:END -->

@@ -1,0 +1,20 @@
+{
+  "name": "safekeys",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Safekeys.ai — encrypted transport for secrets through agentic/LLM flows so plaintext is never exposed to models.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "usm:validate": "usm validate .usm/**/*.usm",
+    "usm:generate": "usm generate",
+    "usm:check": "usm generate --check",
+    "usm:docs": "usm docs serve --watch --auto-port",
+    "usm:query": "usm query"
+  },
+  "devDependencies": {
+    "vitepress": "^1.6.4"
+  },
+  "allowScripts": {
+    "esbuild@0.21.5": true
+  }
+}

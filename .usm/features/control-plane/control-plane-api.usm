@@ -1,0 +1,184 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/control-plane-api
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  The Control Plane API is the authority service: it allocates object ids, issues and revokes
+  capability tokens, evaluates policy, and exposes the audit log. Sidecars and CLIs authenticate to
+  it with an API key in the MVP and mTLS later. It never accepts or stores plaintext.
+$system: smith-gray/system
+$service: smith-gray/control-plane
+status: planned
+intent: |
+  Tokens need an issuing authority, policy needs a central place to live and change, and audit needs
+  an append-only home. Centralising those makes the sidecar simple and stateless about authority,
+  and keeps the only network-exposed component entirely outside the decryption path.
+
+flows:
+  - id: allocate-object
+    name: Allocate an object id and wrapping policy
+    description: The sidecar asks the control plane to register a new secret object.
+    steps:
+      - id: s1
+        action: receive
+        target: Sidecar requests an object id with an intended wrapping policy and owning principal.
+      - id: s2
+        action: validate
+        target: Authenticate the sidecar and authorise object creation for that principal.
+      - id: s3
+        action: generate
+        target: Allocate and persist an object id and its policy record.
+      - id: s4
+        action: receive
+        target: Sidecar receives the object id; no secret material is involved.
+  - id: issue-token
+    name: Issue a capability token
+    description: The control plane mints a signed token for an object, scope, and audience.
+    steps:
+      - id: s1
+        action: receive
+        target: Receive a mint request with object id, scope, audience, and TTL.
+      - id: s2
+        action: validate
+        target: Evaluate policy for the requester, scope, object, and audience.
+      - id: s3
+        action: generate
+        target: Build claims and sign the token with the active kid.
+      - id: s4
+        action: record
+        target: Record the jti and the issuance event.
+      - id: s5
+        action: send
+        target: Return the token URI.
+  - id: revoke-token
+    name: Revoke a token
+    description: The control plane adds a jti to the denylist.
+    steps:
+      - id: s1
+        action: receive
+        target: Receive a revoke request for a jti or object.
+      - id: s2
+        action: record
+        target: Add to the denylist and write an audit record.
+      - id: s3
+        action: observe
+        target: Subsequent resolves with that jti are denied.
+
+routes:
+  - path: /v1/objects
+    type: api
+    protocol: rest
+    http_methods: [POST]
+    description: Allocate a new secret object and its wrapping policy.
+  - path: /v1/tokens
+    type: api
+    protocol: rest
+    http_methods: [POST]
+    description: Issue a capability token for an object, scope, and audience.
+  - path: /v1/tokens/{jti}
+    type: api
+    protocol: rest
+    http_methods: [DELETE]
+    description: Revoke a token by its unique id.
+  - path: /v1/audit
+    type: api
+    protocol: rest
+    http_methods: [GET]
+    description: Query the append-only audit log.
+  - path: /v1/policies
+    type: api
+    protocol: rest
+    http_methods: [GET, PUT]
+    description: Read and update resolution policy.
+  - path: /healthz
+    type: api
+    protocol: rest
+    http_methods: [GET]
+    description: Liveness and readiness probe.
+
+contracts:
+  - id: no-plaintext-in-api
+    description: No endpoint may accept or return plaintext secret material.
+    must_have:
+      - Request and response bodies carry identifiers, scopes, and metadata only
+      - The API has no create-with-value endpoint
+      - Contract enforced by schema tests on every handler
+  - id: authenticated-clients
+    description: Every endpoint requires an authenticated, authorised client.
+    must_have:
+      - API key authentication in the MVP; mTLS for sidecars later
+      - Per-client scopes limit which operations are reachable
+      - Unauthenticated requests are rejected before any state change
+  - id: idempotent-issue-and-revoke
+    description: Issue and revoke tolerate retries without duplicating or corrupting state.
+    must_have:
+      - Revoking an already-revoked jti is not an error
+      - A retried issue does not mint two live tokens for one logical request
+      - State changes are transactional in Postgres
+  - id: token-issuance-is-audited
+    description: Every issuance and revocation is recorded.
+    must_have:
+      - Principal, object, scope, audience, jti, and timestamp are recorded
+      - Records are append-only
+      - Records never contain secret material
+
+tests:
+  - id: no-endpoint-accepts-plaintext
+    flow: allocate-object
+    setup:
+      attempt: "POST /v1/objects with a value field"
+    expect:
+      - assertion: the request is rejected
+      - assertion: no value is persisted
+    contracts:
+      - no-plaintext-in-api
+  - id: unauthenticated-request-rejected
+    flow: issue-token
+    setup:
+      credentials: none
+    expect:
+      - assertion: the request is rejected with an authentication error
+      - assertion: no token is minted
+    contracts:
+      - authenticated-clients
+  - id: revoke-twice-is-safe
+    flow: revoke-token
+    setup:
+      revoke_calls: 2
+    expect:
+      - assertion: both calls succeed
+      - assertion: the jti is denied
+    contracts:
+      - idempotent-issue-and-revoke
+  - id: issuance-audited
+    flow: issue-token
+    expect:
+      - assertion: an audit record exists for the issuance
+      - assertion: it contains the jti and scope
+    contracts:
+      - token-issuance-is-audited
+
+decisions:
+  - id: go-and-postgres
+    decision: Implement the control plane as a Go service on Postgres.
+    rationale: A single static binary and a battle-tested transactional store, sharing a toolchain with the sidecar and CLI. Policy and audit both need transactions, which rules out a simpler embedded store for the MVP.
+    status: accepted
+  - id: no-create-with-value-endpoint
+    decision: Deliberately omit any endpoint that accepts a secret value.
+    rationale: "The API's shape is part of the security design — if values cannot be posted, integrators cannot accidentally route plaintext through the control plane. Value creation belongs on the local sidecar channel."
+    status: accepted
+  - id: api-key-then-mtls
+    decision: Start with API keys and add mTLS for sidecars alongside hardware binding.
+    rationale: API keys are enough for an MVP where the sidecar is operator-installed, and mTLS earns its complexity only once device identity needs to be attested.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/api
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/capability-token"
+  - "smith-gray/policy-engine"
+  - "smith-gray/audit-logging"

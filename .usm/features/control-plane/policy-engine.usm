@@ -1,0 +1,141 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/policy-engine
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  The policy engine decides which sidecar, principal, and process may resolve which object, for
+  which scope, into which environment. It runs at token issuance and again as a local check in the
+  sidecar, so a token that exists is still not sufficient if local policy forbids the request.
+$system: smith-gray/system
+$service: smith-gray/control-plane
+status: planned
+intent: |
+  A valid token proves authority was once granted; it does not prove the request in front of you is
+  allowed now, from this host, under this injection method. Policy is the layer that expresses
+  customer rules — this sidecar may inject env in staging but never inject-file in production — and
+  it is where enterprise control eventually lives.
+
+flows:
+  - id: evaluate-issuance-policy
+    name: Evaluate policy at issuance
+    description: The control plane decides whether to mint the requested token at all.
+    steps:
+      - id: s1
+        action: receive
+        target: Receive a mint request with requester, object, scope, audience, and TTL.
+      - id: s2
+        action: validate
+        target: Load the applicable policy for the requester and object.
+      - id: s3
+        action: observe
+        target: Allow, or deny with a generic error.
+      - id: s4
+        action: record
+        target: The decision is recorded in the audit log.
+  - id: evaluate-local-policy
+    name: Evaluate local policy at resolve
+    description: The sidecar applies host-local policy before injecting.
+    steps:
+      - id: s1
+        action: receive
+        target: Sidecar receives a resolve request with a valid token and an injection method.
+      - id: s2
+        action: validate
+        target: Check local policy — which processes may request which injection method for which object.
+      - id: s3
+        action: observe
+        target: Allow, or deny by default if unspecified.
+      - id: s4
+        action: record
+        target: The decision, including denials, is reported to the audit log.
+
+contracts:
+  - id: least-privilege-scope
+    description: Policy grants the narrowest scope that satisfies the request.
+    must_have:
+      - Scope is one of read, unwrap, inject-env, inject-file, sign
+      - A broad request is denied rather than silently reduced unless a rule permits the reduction
+      - No wildcard scope is granted implicitly
+  - id: local-policy-default-deny
+    description: Absent an explicit local allow, the sidecar denies.
+    must_have:
+      - Undefined rules do not default to permit
+      - The default is documented and tested
+      - Local policy is operator-editable without redeploying the sidecar
+  - id: environment-binding
+    description: Policy can bind resolution to a specific environment or audience.
+    must_have:
+      - Rules can require a matching audience or environment
+      - A staging policy cannot be satisfied by a production token
+      - Binding is enforced at resolve, not only at issuance
+  - id: policy-decisions-audited
+    description: Both allow and deny decisions are recorded.
+    must_have:
+      - Denials are recorded with the rule that denied
+      - Allows are recorded with the matched rule
+      - The audit trail explains a decision without exposing the secret
+
+tests:
+  - id: undefined-rule-denies
+    flow: evaluate-local-policy
+    setup:
+      local_policy: empty
+    expect:
+      - assertion: the resolve is denied
+      - assertion: the denial is recorded
+    contracts:
+      - local-policy-default-deny
+  - id: injection-method-restricted
+    flow: evaluate-local-policy
+    setup:
+      policy_allows: inject-env
+      request: inject-file
+    expect:
+      - assertion: the request is denied
+      - assertion: the reason names the denied rule
+    contracts:
+      - least-privilege-scope
+  - id: cross-environment-policy-not-satisfied
+    flow: evaluate-local-policy
+    setup:
+      policy_requires: env-production
+      token_aud: env-staging
+    expect:
+      - assertion: the resolve is denied
+      - assertion: policy is enforced at resolve as well as issuance
+    contracts:
+      - environment-binding
+  - id: decisions-are-audited
+    flow: evaluate-issuance-policy
+    setup:
+      outcome: deny
+    expect:
+      - assertion: an audit record exists for the policy decision
+      - assertion: it identifies the denying rule
+    contracts:
+      - policy-decisions-audited
+
+decisions:
+  - id: policy-at-both-points
+    decision: Evaluate policy at issuance and again locally at resolve.
+    rationale: Issuance-time checks alone cannot express host-local constraints like which process may inject a file. Resolve-time checks alone cannot prevent unnecessary tokens existing at all. Both layers together give least privilege at each moment.
+    status: accepted
+  - id: default-deny
+    decision: Default to deny when no rule matches.
+    rationale: Allow-by-default silently fails open as configuration drifts. Deny-by-default makes an incomplete configuration safe rather than dangerous.
+    status: accepted
+  - id: enterprise-features-later
+    decision: Keep SSO, compliance reporting, and rich policy authoring out of the MVP.
+    rationale: The MVP needs a working allow/deny engine with audit, not a policy authoring UX. The richer control surface is the commercial layer.
+    status: accepted
+
+implementation:
+  primary: apps/control-plane/internal/policy
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/control-plane-api"
+  - "smith-gray/sidecar-resolution"
+  - "smith-gray/audit-logging"

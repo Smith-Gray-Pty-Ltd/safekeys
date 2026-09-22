@@ -1,0 +1,107 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/exec-wrapper
+$type: feature
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  `safekeys exec --token … -- <command>` runs a command with secrets injected into its environment
+  and the ambient environment scrubbed. It is the framework-agnostic integration: any harness that
+  can spawn a subprocess works immediately, and the caller receives only an exit code.
+$system: smith-gray/system
+$service: smith-gray/cli
+status: planned
+intent: |
+  The cleanest "the model never sees plaintext" path is the one where the secret never appears in
+  any argument, output, or transcript the model can read. A wrapper that spawns the consumer as its
+  own child, passes secrets through the child's environment, and returns only an exit code achieves
+  that for every tool that already exists, with no SDK or framework integration required.
+
+flows:
+  - id: exec-with-token
+    name: Execute a wrapped command
+    description: The CLI resolves the token and runs the command with injected env.
+    steps:
+      - id: s1
+        action: receive
+        target: CLI receives a token and a command to run after a -- separator.
+      - id: s2
+        action: send
+        target: CLI forwards the resolve request to the local sidecar over its socket.
+      - id: s3
+        action: setup
+        target: Sidecar builds a minimal environment for the child, adds the injected value under its variable name, and spawns the command.
+      - id: s4
+        action: observe
+        target: The command runs; its stdout and stderr are streamed to the caller.
+      - id: s5
+        action: receive
+        target: The caller receives the command's exit code; the value is never printed by the wrapper.
+
+contracts:
+  - id: env-scrubbed
+    description: The wrapped command must not inherit the full ambient environment.
+    must_have:
+      - The child gets a minimal, explicit environment
+      - The child does not inherit the agent's or shell's full variable set
+      - Only the requested secrets are added by name
+  - id: exit-code-only
+    description: The wrapper returns a status, never a value.
+    must_have:
+      - Success is communicated by exit code
+      - The wrapper does not echo resolved values to stdout or stderr
+      - Arguments to the wrapper never contain plaintext
+  - id: token-not-plaintext-argv
+    description: The command line carries a token, not a secret.
+    must_have:
+      - The token appears in argv, which is not sensitive
+      - No plaintext ever appears in argv
+      - Process listings reveal nothing sensitive
+
+tests:
+  - id: child-sees-injected-env
+    flow: exec-with-token
+    setup:
+      command: "sh -c 'test \"$API_KEY\" = \"expected\"'"
+    expect:
+      - assertion: the command exits zero
+      - assertion: the injected variable is present in the child environment
+    contracts:
+      - env-scrubbed
+  - id: ambient-env-not-inherited
+    flow: exec-with-token
+    setup:
+      ambient_var: "SHOULD_NOT_APPEAR"
+    expect:
+      - assertion: the child does not see ambient variables outside the explicit allowlist
+    contracts:
+      - env-scrubbed
+  - id: no-plaintext-in-argv-or-output
+    flow: exec-with-token
+    setup:
+      command: "printenv API_KEY"
+    expect:
+      - assertion: the wrapper's own output does not include the value
+      - assertion: process arguments contain the token but not the value
+    contracts:
+      - exit-code-only
+      - token-not-plaintext-argv
+
+decisions:
+  - id: exec-is-framework-agnostic
+    decision: Ship the exec wrapper as a first-class MVP harness integration.
+    rationale: The blueprint lists CLI/exec as one of three MVP integrations precisely because it is framework-agnostic — any harness that can spawn a subprocess works, including ones with no SDK. It is also the cleanest model-never-sees-plaintext path.
+    status: accepted
+  - id: minimal-env
+    decision: Give the child a minimal, explicit environment rather than inheriting and augmenting the parent's.
+    rationale: Inheritance is the classic leak vector — ambient credentials, tokens, and paths follow the process in silently. Allowlisting inverts the default to deny.
+    status: accepted
+
+implementation:
+  primary: apps/cli/cmd/exec.go
+  test_code: ""
+  test_code_status: none
+
+see_also:
+  - "smith-gray/secret-injection"
+  - "smith-gray/python-sdk"
+  - "smith-gray/mcp-server"

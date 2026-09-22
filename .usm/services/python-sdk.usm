@@ -1,0 +1,65 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/python-sdk
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Python Agent SDK — a token-only client for agents building secret workflows (LangChain and LangGraph tools first). It exposes create_secret and resolve_for_tool, and by construction cannot return plaintext to the caller: it only ever returns capability tokens and folder paths.
+
+$system: smith-gray/system
+name: Python SDK
+status: planned
+type: api
+runtime: python
+port: 0
+paths:
+  - packages/sdk-python
+depends_on:
+  - cli
+
+tech_stack:
+  language: Python 3.11+
+  packaging: pyproject.toml, published to PyPI
+  agent_frameworks: LangChain and LangGraph tools first
+  transport: local sidecar Unix socket
+
+dev:
+  command: "python -m pytest packages/sdk-python"
+  url: ""
+  env:
+    SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
+
+prod:
+  url: ""
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: pytest
+  command: "pytest packages/sdk-python"
+  coverage_target: "80%"
+
+security:
+  auth_method: Local sidecar socket
+  secrets_ref: docs/help/security-model.md
+
+modules:
+  - name: client
+    purpose: Sidecar socket client and token handling
+    paths: [packages/sdk-python/safekeys]
+  - name: tools
+    purpose: LangChain / LangGraph tool definitions (create_secret, resolve_for_tool)
+    paths: [packages/sdk-python/safekeys/tools]
+
+risks:
+  - "A developer could bypass the SDK and handle plaintext directly; the SDK's value is that its API surface makes the safe path the easy path."
+
+future:
+  - "TypeScript SDK with an identical API surface."
+  - "OpenAI Agents SDK adapter built on the same tools."
+
+decisions:
+  - id: token-only-api
+    decision: The SDK API accepts and returns only tokens and folder paths — never plaintext values.
+    rationale: Making plaintext unrepresentable in the type surface means an agent using the SDK cannot accidentally route a value through model context.
+    status: accepted

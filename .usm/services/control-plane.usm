@@ -1,0 +1,98 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/control-plane
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Control Plane API — issues and revokes capability tokens, manages policy, and exposes the audit log. It never receives plaintext secrets. Built in Go on Postgres, authenticating sidecars and CLIs via API key in the MVP and mTLS later.
+
+$system: smith-gray/system
+name: Control Plane API
+status: planned
+type: api
+runtime: go
+port: 8080
+paths:
+  - apps/control-plane
+depends_on:
+  - key-store
+  - postgres
+
+tech_stack:
+  language: Go
+  framework: net/http (standard library) or chi
+  database: Postgres
+  key_store: OpenBao or Vault (Transit / KV)
+  migrations: SQL migrations applied at boot
+  observability: Prometheus metrics and structured logs
+
+dev:
+  command: "go run ./apps/control-plane/cmd/server"
+  url: "http://localhost:8080"
+  env:
+    DATABASE_URL: postgres://localhost:5432/safekeys
+    KEYSTORE_ADDR: http://localhost:8200
+    KEYSTORE_TOKEN: dev-only-token
+    CONTROL_PLANE_API_KEY: dev-only-api-key
+
+prod:
+  url: ""
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: Go testing + testcontainers for Postgres
+  command: "go test ./apps/control-plane/..."
+  coverage_target: "80%"
+
+security:
+  auth_method: API key (MVP), mutual TLS for sidecars (later)
+  secrets_ref: docs/help/control-plane-auth.md
+
+rbac:
+  description: |
+    Two client classes in the MVP. Human operators hold admin credentials (create/revoke policy,
+    read audit). Sidecars hold narrow credentials scoped to their environment and may only request
+    unwrap and report resolves.
+  roles:
+    - name: operator
+      level: admin
+    - name: sidecar
+      level: resolve-only
+    - name: auditor
+      level: read-only
+
+modules:
+  - name: api
+    purpose: HTTP handlers for token issue, revoke, policy, and audit endpoints
+    paths: [apps/control-plane/internal/api]
+  - name: token
+    purpose: Capability token minting, signing (kid), TTL and scope validation, jti registry
+    paths: [apps/control-plane/internal/token]
+  - name: policy
+    purpose: Policy evaluation — which sidecar may resolve which object for which scope
+    paths: [apps/control-plane/internal/policy]
+  - name: audit
+    purpose: Append-only audit records for create, resolve, deny, and revoke events
+    paths: [apps/control-plane/internal/audit]
+  - name: keystore
+    purpose: Client for OpenBao/Vault — envelope key wrapping and unwrap brokering
+    paths: [apps/control-plane/internal/keystore]
+
+risks:
+  - "Control plane credential compromise could mint tokens — mitigated because the plane holds no plaintext and the master key lives in the key store or hardware element."
+  - "Postgres is a single point of failure for policy and audit; MVP accepts this with backups."
+
+future:
+  - "Multi-tenant hosted authority with SSO and compliance reporting."
+  - "mTLS device identity binding for sidecars."
+
+decisions:
+  - id: go-and-postgres
+    decision: Implement the control plane in Go backed by Postgres.
+    rationale: Go gives a single static binary for operators, a strong standard library for HTTP and crypto, and shares a toolchain with the CLI and sidecar. Postgres provides transactional policy and audit storage.
+    status: accepted
+  - id: no-plaintext-at-control-plane
+    decision: The control plane must never accept or store plaintext secret material.
+    rationale: Keeps the most network-exposed component outside the decryption path, so its compromise alone cannot reveal secrets.
+    status: accepted

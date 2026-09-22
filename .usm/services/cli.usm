@@ -1,0 +1,72 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/cli
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Safekeys CLI — the operator and agent-facing command line (safekeys create, exec, revoke, list). It talks to the local sidecar over the Unix socket and to the control plane for token lifecycle, never handling plaintext except on the create path where it writes directly to the sidecar.
+
+$system: smith-gray/system
+name: Safekeys CLI
+status: planned
+type: api
+runtime: go
+port: 0
+paths:
+  - apps/cli
+depends_on:
+  - sidecar
+  - control-plane
+
+tech_stack:
+  language: Go
+  framework: spf13/cobra for command routing
+  distribution: single static binary per platform (Linux, macOS)
+
+dev:
+  command: "go run ./apps/cli/cmd/safekeys"
+  url: ""
+  env:
+    SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
+    CONTROL_PLANE_URL: http://localhost:8080
+
+prod:
+  url: ""
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: Go testing
+  command: "go test ./apps/cli/..."
+  coverage_target: "80%"
+
+security:
+  auth_method: Local sidecar socket plus control-plane API key
+  secrets_ref: docs/help/security-model.md
+
+modules:
+  - name: create
+    purpose: Read plaintext from a file or stdin and hand it to the sidecar; return only a token
+    paths: [apps/cli/cmd/create.go]
+  - name: exec
+    purpose: Run a wrapped command with injected secrets and a scrubbed environment
+    paths: [apps/cli/cmd/exec.go]
+  - name: revoke
+    purpose: Revoke a token by jti or an object by id via the control plane
+    paths: [apps/cli/cmd/revoke.go]
+  - name: list
+    purpose: List known objects and active tokens (metadata only, never values)
+    paths: [apps/cli/cmd/list.go]
+
+risks:
+  - "A user may pipe plaintext in a way that lands in shell history or process listings; the CLI must prefer stdin and file inputs over argv."
+
+future:
+  - "Windows binary."
+  - "Shell completion packages."
+
+decisions:
+  - id: exec-is-primary-injection
+    decision: The exec wrapper is the preferred injection mechanism over returning values on stdout.
+    rationale: The blueprint is explicit that agents should receive only a success code or a path, and that env/exec injection is preferable to printing values where a model or log could capture them.
+    status: accepted

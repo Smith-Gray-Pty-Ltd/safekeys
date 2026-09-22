@@ -1,0 +1,90 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/sidecar
+$type: service
+$version: 1
+$last_updated: "2026-09-22"
+summary: |
+  Sidecar / Resolver — the only component permitted to resolve a capability token. It validates tokens, requests data-key unwrap from the key store, injects plaintext into a non-LLM consumer, and zeroises. Written in Go, it runs as a separate user from agents with seccomp/AppArmor confinement and no shared memory.
+
+$system: smith-gray/system
+name: Sidecar / Resolver
+status: planned
+type: worker
+runtime: go
+port: 0
+paths:
+  - apps/sidecar
+depends_on:
+  - control-plane
+  - key-store
+
+tech_stack:
+  language: Go
+  crypto: AES-256-GCM and ChaCha20-Poly1305 for object encryption; signed capability tokens
+  transport: Unix domain socket for local agent/CLI requests
+  isolation: separate OS user, seccomp/AppArmor profile, no shared memory with agents
+  observability: Prometheus metrics (resolution latency, deny rate)
+
+dev:
+  command: "go run ./apps/sidecar/cmd/sidecar"
+  url: ""
+  env:
+    SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
+    CONTROL_PLANE_URL: http://localhost:8080
+    CONTROL_PLANE_API_KEY: dev-only-api-key
+
+prod:
+  url: ""
+  region: ""
+  deployment_ref: ""
+
+testing:
+  framework: Go testing
+  command: "go test ./apps/sidecar/..."
+  coverage_target: "80%"
+
+security:
+  auth_method: Local authenticated channel; control-plane API key; device identity via mTLS later
+  secrets_ref: docs/help/security-model.md
+
+modules:
+  - name: token-verify
+    purpose: Verify token signature, expiry, audience, scope, and jti denylist before any unwrap
+    paths: [apps/sidecar/internal/verify]
+  - name: resolve
+    purpose: Request DEK unwrap from the key store and decrypt the target object in memory
+    paths: [apps/sidecar/internal/resolve]
+  - name: inject
+    purpose: Injection adapters — env var, 0600 temp file, Unix socket/pipe, exec wrapper
+    paths: [apps/sidecar/internal/inject]
+  - name: zeroise
+    purpose: Best-effort zeroisation of DEK and plaintext buffers after use
+    paths: [apps/sidecar/internal/zeroise]
+  - name: socket
+    purpose: Local request/response protocol over the Unix domain socket
+    paths: [apps/sidecar/internal/socket]
+
+risks:
+  - "A rooted host can observe the sidecar's process memory — the MVP relies on process isolation only; Phase 1 adds secure element / TEE / TPM binding."
+  - "Long-running sidecar process holds transient DEKs in memory; minimise lifetime and zeroise deterministically."
+
+future:
+  - "Secure element / TPM / cloud enclave backend for the long-term key share."
+  - "Threshold reconstruction of key material inside the element."
+
+decisions:
+  - id: go-sidecar
+    decision: Implement the sidecar in Go rather than Rust.
+    rationale: Shares one toolchain with the control plane and CLI, offers strong process-isolation primitives (seccomp, cgroups, distinct UID), and lowers the contribution barrier for an open-source reference implementation. The blueprint listed "Rust or Go"; Go keeps the MVP path shorter.
+    alternatives:
+      - option: Rust
+        rejected_because: Strongest memory-safety story for the most privileged component, but introduces a second toolchain alongside Go with no MVP-blocking security gain once process isolation and zeroisation are implemented.
+    status: accepted
+  - id: separate-os-user
+    decision: The sidecar runs as a different OS user from any agent process, with no shared memory.
+    rationale: The architectural promise is that compromise of the agent sandbox does not yield the key; user separation plus memory isolation is the mechanism in the software-only phase.
+    status: accepted
+  - id: deny-by-default
+    decision: If the key store or control plane is unreachable, resolution fails closed.
+    rationale: A fallback to cached or plaintext values would violate the core security property.
+    status: accepted
