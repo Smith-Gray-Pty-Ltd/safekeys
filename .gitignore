@@ -34,6 +34,10 @@ yarn-error.log*
 .vscode/*
 !.vscode/extensions.json
 
+# Go build output
+bin/
+*.test
+
 # Test / coverage
 coverage/
 .nyc_output/

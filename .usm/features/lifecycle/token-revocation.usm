@@ -10,13 +10,12 @@ summary: |
   token is revoked by serial.
 $system: smith-gray/system
 $service: smith-gray/control-plane
-status: planned
+status: built
 intent: |
   Short TTLs alone leave an unacceptable window when a token is known to be leaked — minutes to
   hours of live authority. A denylist gives an operator the immediate kill switch that incident
   response requires, and the two mechanisms together cover both the slow case (expiry) and the
   urgent one (revocation).
-
 flows:
   - id: revoke-token
     name: Revoke a capability token
@@ -47,7 +46,6 @@ flows:
       - id: s3
         action: observe
         target: Attestation fails for that device on the next unwrap attempt.
-
 contracts:
   - id: immediate-effect
     description: Revocation must take effect without waiting for token expiry.
@@ -67,7 +65,6 @@ contracts:
       - Device identity is bound at provisioning
       - Revocation invalidates the binding at the authority
       - No re-provisioning of the same serial without operator action
-
 tests:
   - id: revoked-token-denied-on-next-resolve
     flow: revoke-token
@@ -97,23 +94,25 @@ tests:
       - assertion: no in-memory cache bypasses the denylist
     contracts:
       - immediate-effect
-
 decisions:
   - id: denylist-plus-ttl
     decision: Use a jti denylist alongside short TTLs rather than one or the other.
-    rationale: TTL handles the unattended case cheaply and bounds worst-case exposure; the denylist handles the attended, urgent case. Neither alone is sufficient — long TTLs make leaks linger, and denylists alone still require knowing about the leak.
+    rationale: >-
+      TTL handles the unattended case cheaply and bounds worst-case exposure; the denylist handles
+      the attended, urgent case. Neither alone is sufficient — long TTLs make leaks linger, and
+      denylists alone still require knowing about the leak.
     status: accepted
   - id: authoritative-check-at-resolve
     decision: Check revocation at resolve time in the sidecar rather than trusting token validity alone.
-    rationale: The sidecar is the enforcement point; if revocation is not checked there, a revoked token still works wherever it is presented.
+    rationale: >-
+      The sidecar is the enforcement point; if revocation is not checked there, a revoked token
+      still works wherever it is presented.
     status: accepted
-
 implementation:
-  primary: apps/control-plane/internal/token
-  test_code: ""
-  test_code_status: none
-
+  primary: pkg/revocation/checker.go
+  test_code: pkg/revocation/checker_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/capability-token"
-  - "smith-gray/audit-logging"
-  - "smith-gray/hardware-root"
+  - smith-gray/capability-token
+  - smith-gray/audit-logging
+  - smith-gray/hardware-root

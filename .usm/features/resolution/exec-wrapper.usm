@@ -9,13 +9,12 @@ summary: |
   can spawn a subprocess works immediately, and the caller receives only an exit code.
 $system: smith-gray/system
 $service: smith-gray/cli
-status: planned
+status: built
 intent: |
   The cleanest "the model never sees plaintext" path is the one where the secret never appears in
   any argument, output, or transcript the model can read. A wrapper that spawns the consumer as its
   own child, passes secrets through the child's environment, and returns only an exit code achieves
   that for every tool that already exists, with no SDK or framework integration required.
-
 flows:
   - id: exec-with-token
     name: Execute a wrapped command
@@ -29,14 +28,15 @@ flows:
         target: CLI forwards the resolve request to the local sidecar over its socket.
       - id: s3
         action: setup
-        target: Sidecar builds a minimal environment for the child, adds the injected value under its variable name, and spawns the command.
+        target: >-
+          Sidecar builds a minimal environment for the child, adds the injected value under its
+          variable name, and spawns the command.
       - id: s4
         action: observe
         target: The command runs; its stdout and stderr are streamed to the caller.
       - id: s5
         action: receive
         target: The caller receives the command's exit code; the value is never printed by the wrapper.
-
 contracts:
   - id: env-scrubbed
     description: The wrapped command must not inherit the full ambient environment.
@@ -56,12 +56,11 @@ contracts:
       - The token appears in argv, which is not sensitive
       - No plaintext ever appears in argv
       - Process listings reveal nothing sensitive
-
 tests:
   - id: child-sees-injected-env
     flow: exec-with-token
     setup:
-      command: "sh -c 'test \"$API_KEY\" = \"expected\"'"
+      command: sh -c 'test "$API_KEY" = "expected"'
     expect:
       - assertion: the command exits zero
       - assertion: the injected variable is present in the child environment
@@ -70,7 +69,7 @@ tests:
   - id: ambient-env-not-inherited
     flow: exec-with-token
     setup:
-      ambient_var: "SHOULD_NOT_APPEAR"
+      ambient_var: SHOULD_NOT_APPEAR
     expect:
       - assertion: the child does not see ambient variables outside the explicit allowlist
     contracts:
@@ -78,30 +77,34 @@ tests:
   - id: no-plaintext-in-argv-or-output
     flow: exec-with-token
     setup:
-      command: "printenv API_KEY"
+      command: printenv API_KEY
     expect:
       - assertion: the wrapper's own output does not include the value
       - assertion: process arguments contain the token but not the value
     contracts:
       - exit-code-only
       - token-not-plaintext-argv
-
 decisions:
   - id: exec-is-framework-agnostic
     decision: Ship the exec wrapper as a first-class MVP harness integration.
-    rationale: The blueprint lists CLI/exec as one of three MVP integrations precisely because it is framework-agnostic — any harness that can spawn a subprocess works, including ones with no SDK. It is also the cleanest model-never-sees-plaintext path.
+    rationale: >-
+      The blueprint lists CLI/exec as one of three MVP integrations precisely because it is
+      framework-agnostic — any harness that can spawn a subprocess works, including ones with no
+      SDK. It is also the cleanest model-never-sees-plaintext path.
     status: accepted
   - id: minimal-env
-    decision: Give the child a minimal, explicit environment rather than inheriting and augmenting the parent's.
-    rationale: Inheritance is the classic leak vector — ambient credentials, tokens, and paths follow the process in silently. Allowlisting inverts the default to deny.
+    decision: >-
+      Give the child a minimal, explicit environment rather than inheriting and augmenting the
+      parent's.
+    rationale: >-
+      Inheritance is the classic leak vector — ambient credentials, tokens, and paths follow the
+      process in silently. Allowlisting inverts the default to deny.
     status: accepted
-
 implementation:
-  primary: apps/cli/cmd/exec.go
-  test_code: ""
-  test_code_status: none
-
+  primary: apps/cli/internal/commands/commands.go
+  test_code: pkg/inject/inject_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/secret-injection"
-  - "smith-gray/python-sdk"
-  - "smith-gray/mcp-server"
+  - smith-gray/secret-injection
+  - smith-gray/python-sdk
+  - smith-gray/mcp-server

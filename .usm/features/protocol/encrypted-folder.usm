@@ -10,7 +10,7 @@ summary: |
   live token plus a reachable sidecar and key authority allow use.
 $system: smith-gray/system
 $service: smith-gray/sidecar
-status: planned
+status: built
 intent: |
   Secrets need to move the way artefacts move — through git, object stores, artefacts folders, and
   agent handoffs — without each hop being a new exposure. Making the transport unit an inert
@@ -142,9 +142,9 @@ decisions:
     status: accepted
     date: "2026-09-22"
 implementation:
-  primary: apps/sidecar/internal/resolve
-  test_code: ""
-  test_code_status: none
+  primary: pkg/protocol/folder.go
+  test_code: pkg/protocol/protocol_test.go
+  test_code_status: manual
 see_also:
   - smith-gray/envelope-encryption
   - smith-gray/secret-transport

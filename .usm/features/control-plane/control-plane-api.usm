@@ -9,12 +9,11 @@ summary: |
   it with an API key in the MVP and mTLS later. It never accepts or stores plaintext.
 $system: smith-gray/system
 $service: smith-gray/control-plane
-status: planned
+status: built
 intent: |
   Tokens need an issuing authority, policy needs a central place to live and change, and audit needs
   an append-only home. Centralising those makes the sidecar simple and stateless about authority,
   and keeps the only network-exposed component entirely outside the decryption path.
-
 flows:
   - id: allocate-object
     name: Allocate an object id and wrapping policy
@@ -64,39 +63,44 @@ flows:
       - id: s3
         action: observe
         target: Subsequent resolves with that jti are denied.
-
 routes:
   - path: /v1/objects
     type: api
     protocol: rest
-    http_methods: [POST]
+    http_methods:
+      - POST
     description: Allocate a new secret object and its wrapping policy.
   - path: /v1/tokens
     type: api
     protocol: rest
-    http_methods: [POST]
+    http_methods:
+      - POST
     description: Issue a capability token for an object, scope, and audience.
   - path: /v1/tokens/{jti}
     type: api
     protocol: rest
-    http_methods: [DELETE]
+    http_methods:
+      - DELETE
     description: Revoke a token by its unique id.
   - path: /v1/audit
     type: api
     protocol: rest
-    http_methods: [GET]
+    http_methods:
+      - GET
     description: Query the append-only audit log.
   - path: /v1/policies
     type: api
     protocol: rest
-    http_methods: [GET, PUT]
+    http_methods:
+      - GET
+      - PUT
     description: Read and update resolution policy.
   - path: /healthz
     type: api
     protocol: rest
-    http_methods: [GET]
+    http_methods:
+      - GET
     description: Liveness and readiness probe.
-
 contracts:
   - id: no-plaintext-in-api
     description: No endpoint may accept or return plaintext secret material.
@@ -122,12 +126,11 @@ contracts:
       - Principal, object, scope, audience, jti, and timestamp are recorded
       - Records are append-only
       - Records never contain secret material
-
 tests:
   - id: no-endpoint-accepts-plaintext
     flow: allocate-object
     setup:
-      attempt: "POST /v1/objects with a value field"
+      attempt: POST /v1/objects with a value field
     expect:
       - assertion: the request is rejected
       - assertion: no value is persisted
@@ -158,27 +161,32 @@ tests:
       - assertion: it contains the jti and scope
     contracts:
       - token-issuance-is-audited
-
 decisions:
   - id: go-and-postgres
     decision: Implement the control plane as a Go service on Postgres.
-    rationale: A single static binary and a battle-tested transactional store, sharing a toolchain with the sidecar and CLI. Policy and audit both need transactions, which rules out a simpler embedded store for the MVP.
+    rationale: >-
+      A single static binary and a battle-tested transactional store, sharing a toolchain with the
+      sidecar and CLI. Policy and audit both need transactions, which rules out a simpler embedded
+      store for the MVP.
     status: accepted
   - id: no-create-with-value-endpoint
     decision: Deliberately omit any endpoint that accepts a secret value.
-    rationale: "The API's shape is part of the security design — if values cannot be posted, integrators cannot accidentally route plaintext through the control plane. Value creation belongs on the local sidecar channel."
+    rationale: >-
+      The API's shape is part of the security design — if values cannot be posted, integrators
+      cannot accidentally route plaintext through the control plane. Value creation belongs on the
+      local sidecar channel.
     status: accepted
   - id: api-key-then-mtls
     decision: Start with API keys and add mTLS for sidecars alongside hardware binding.
-    rationale: API keys are enough for an MVP where the sidecar is operator-installed, and mTLS earns its complexity only once device identity needs to be attested.
+    rationale: >-
+      API keys are enough for an MVP where the sidecar is operator-installed, and mTLS earns its
+      complexity only once device identity needs to be attested.
     status: accepted
-
 implementation:
-  primary: apps/control-plane/internal/api
-  test_code: ""
-  test_code_status: none
-
+  primary: apps/control-plane/internal/api/api.go
+  test_code: apps/control-plane/internal/inttest/control_plane_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/capability-token"
-  - "smith-gray/policy-engine"
-  - "smith-gray/audit-logging"
+  - smith-gray/capability-token
+  - smith-gray/policy-engine
+  - smith-gray/audit-logging

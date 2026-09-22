@@ -9,7 +9,7 @@ summary: |
   prompts, memory, tool calls, and multi-agent buses where a value is not.
 $system: smith-gray/system
 $service: smith-gray/control-plane
-status: planned
+status: built
 intent: |
   Agents must be able to define, create, transport, and request use of secrets without ever
   receiving plaintext or long-term keys. A token decouples "the right to use a secret" from "the
@@ -222,9 +222,9 @@ decisions:
     status: accepted
     date: "2026-09-22"
 implementation:
-  primary: apps/control-plane/internal/token
-  test_code: ""
-  test_code_status: none
+  primary: pkg/protocol/token.go
+  test_code: pkg/protocol/protocol_test.go
+  test_code_status: manual
 see_also:
   - smith-gray/secret-transport
   - smith-gray/token-revocation

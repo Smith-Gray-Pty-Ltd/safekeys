@@ -1,0 +1,58 @@
+services:
+  # Postgres — control plane state: objects, tokens, audit, policy.
+  # See .usm/services/control-plane-db.usm
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: safekeys
+      POSTGRES_USER: safekeys
+      POSTGRES_PASSWORD: safekeys-dev-password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safekeys -d safekeys"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # OpenBao — the key store holding the KEK. OpenBao is the OSS fork of Vault.
+  # The KEK never leaves this service; sidecars receive only wrapped/unwrapped
+  # DEKs. See ADR kek-never-leaves-store.
+  openbao:
+    image: openbao/openbao:latest
+    command: server -dev -dev-root-token-id=root
+    environment:
+      BAO_DEV_ROOT_TOKEN_ID: root
+      BAO_ADDR: http://0.0.0.0:8200
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD", "bao", "status"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # One-shot init: enable the transit engine and create the KEK named kek-1.
+  openbao-init:
+    image: openbao/openbao:latest
+    depends_on:
+      openbao:
+        condition: service_healthy
+    environment:
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN: root
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        bao secrets enable transit 2>/dev/null || true
+        bao write -f transit/keys/kek-1 2>/dev/null || true
+        echo "openbao: transit/kek-1 ready"
+    restart: "no"
+
+volumes:
+  pgdata:

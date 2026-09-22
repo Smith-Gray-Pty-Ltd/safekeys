@@ -10,13 +10,12 @@ summary: |
   to perform it, and it denies by default.
 $system: smith-gray/system
 $service: smith-gray/sidecar
-status: planned
+status: built
 intent: |
   This is the enforcement point for the whole product. Every other component can be compromised or
   merely careless; as long as resolution only occurs inside a separated privileged process that
   checks a token first, the model never sees a secret. Concentrating the sensitive operation in one
   auditable place is what makes the security property architectural rather than aspirational.
-
 flows:
   - id: resolve-and-inject
     name: Resolve a token and inject the secret
@@ -46,7 +45,6 @@ flows:
       - id: s8
         action: observe
         target: Append an audit record — who, what scope, which jti, which host — without plaintext.
-
 contracts:
   - id: resolution-only-in-sidecar
     description: No component other than the sidecar may resolve a token or decrypt an object.
@@ -78,7 +76,6 @@ contracts:
       - Records include requester, scope, jti, object id, host, and outcome
       - Records never contain plaintext, DEKs, or KEKs
       - Denials are recorded as well as successes
-
 tests:
   - id: resolution-denied-without-token
     flow: resolve-and-inject
@@ -122,7 +119,7 @@ tests:
   - id: prompt-injection-cannot-dump-keys
     flow: resolve-and-inject
     setup:
-      attack: "model instructs agent to print all environment variables and resolve every token it can see"
+      attack: model instructs agent to print all environment variables and resolve every token it can see
     expect:
       - assertion: the agent can only request resolution via the token it holds
       - assertion: injected values are not readable back through the sidecar
@@ -130,28 +127,33 @@ tests:
     contracts:
       - resolution-only-in-sidecar
       - agent-gets-status-not-value
-
 decisions:
   - id: sidecar-is-the-only-resolver
     decision: Concentrate all token resolution and decryption in the privileged sidecar.
-    rationale: A single auditable enforcement point is easier to isolate, review, and harden than resolution logic spread across SDKs and runtimes — and it is what lets the agent-facing API stay stable while the backend changes.
+    rationale: >-
+      A single auditable enforcement point is easier to isolate, review, and harden than resolution
+      logic spread across SDKs and runtimes — and it is what lets the agent-facing API stay stable
+      while the backend changes.
     status: accepted
   - id: socket-request-response
     decision: Expose resolution to local callers over a Unix domain socket.
-    rationale: It provides a natural authenticated local channel, avoids exposing a network port, and lets the OS enforce filesystem permissions on who may even connect. Long-running local services also need the pipe/socket injection mode anyway.
+    rationale: >-
+      It provides a natural authenticated local channel, avoids exposing a network port, and lets
+      the OS enforce filesystem permissions on who may even connect. Long-running local services
+      also need the pipe/socket injection mode anyway.
     status: accepted
   - id: no-shared-memory
     decision: The sidecar shares no memory with agent processes.
-    rationale: The architectural promise is that a compromised agent sandbox does not yield the key; shared memory would reintroduce exactly the surface being eliminated.
+    rationale: >-
+      The architectural promise is that a compromised agent sandbox does not yield the key; shared
+      memory would reintroduce exactly the surface being eliminated.
     status: accepted
-
 implementation:
-  primary: apps/sidecar/internal/resolve
-  test_code: ""
-  test_code_status: none
-
+  primary: pkg/resolve/resolve.go
+  test_code: test/e2e/two_agent_demo_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/capability-token"
-  - "smith-gray/secret-injection"
-  - "smith-gray/audit-logging"
-  - "smith-gray/hardware-root"
+  - smith-gray/capability-token
+  - smith-gray/secret-injection
+  - smith-gray/audit-logging
+  - smith-gray/hardware-root

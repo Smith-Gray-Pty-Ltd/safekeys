@@ -9,13 +9,12 @@ summary: |
   sidecar, so a token that exists is still not sufficient if local policy forbids the request.
 $system: smith-gray/system
 $service: smith-gray/control-plane
-status: planned
+status: in-progress
 intent: |
   A valid token proves authority was once granted; it does not prove the request in front of you is
   allowed now, from this host, under this injection method. Policy is the layer that expresses
   customer rules — this sidecar may inject env in staging but never inject-file in production — and
   it is where enterprise control eventually lives.
-
 flows:
   - id: evaluate-issuance-policy
     name: Evaluate policy at issuance
@@ -49,7 +48,6 @@ flows:
       - id: s4
         action: record
         target: The decision, including denials, is reported to the audit log.
-
 contracts:
   - id: least-privilege-scope
     description: Policy grants the narrowest scope that satisfies the request.
@@ -75,7 +73,6 @@ contracts:
       - Denials are recorded with the rule that denied
       - Allows are recorded with the matched rule
       - The audit trail explains a decision without exposing the secret
-
 tests:
   - id: undefined-rule-denies
     flow: evaluate-local-policy
@@ -115,27 +112,47 @@ tests:
       - assertion: it identifies the denying rule
     contracts:
       - policy-decisions-audited
-
 decisions:
   - id: policy-at-both-points
     decision: Evaluate policy at issuance and again locally at resolve.
-    rationale: Issuance-time checks alone cannot express host-local constraints like which process may inject a file. Resolve-time checks alone cannot prevent unnecessary tokens existing at all. Both layers together give least privilege at each moment.
+    rationale: >-
+      Issuance-time checks alone cannot express host-local constraints like which process may inject
+      a file. Resolve-time checks alone cannot prevent unnecessary tokens existing at all. Both
+      layers together give least privilege at each moment.
     status: accepted
   - id: default-deny
     decision: Default to deny when no rule matches.
-    rationale: Allow-by-default silently fails open as configuration drifts. Deny-by-default makes an incomplete configuration safe rather than dangerous.
+    rationale: >-
+      Allow-by-default silently fails open as configuration drifts. Deny-by-default makes an
+      incomplete configuration safe rather than dangerous.
     status: accepted
   - id: enterprise-features-later
     decision: Keep SSO, compliance reporting, and rich policy authoring out of the MVP.
-    rationale: The MVP needs a working allow/deny engine with audit, not a policy authoring UX. The richer control surface is the commercial layer.
+    rationale: >-
+      The MVP needs a working allow/deny engine with audit, not a policy authoring UX. The richer
+      control surface is the commercial layer.
     status: accepted
-
+  - id: policy-via-database-rules
+    decision: >-
+      Evaluate policy from operator-authored rules in Postgres, rebuilt per evaluation so a change
+      takes effect without a restart.
+    rationale: >-
+      Issuance-time checks alone cannot express host-local constraints like which process may inject
+      a file; resolve-time checks alone cannot prevent unnecessary tokens existing. The engine
+      itself is complete and default-denies, but the sidecar's local-policy checker in this MVP
+      build allows what the issuer authorised rather than loading its own rule set — that refinement
+      is tracked here rather than overstated as done.
+    consequences: >-
+      The control-plane engine is built and tested (default-deny, first-match-wins, scope narrowing,
+      environment binding, injection-method restriction). The sidecar's resolve-time rule loading is
+      a follow-up; until it lands, resolve-time policy is an allow for any token the issuer minted.
+    status: accepted
+    date: "2026-09-22"
 implementation:
-  primary: apps/control-plane/internal/policy
-  test_code: ""
-  test_code_status: none
-
+  primary: apps/control-plane/internal/policy/policy.go
+  test_code: apps/control-plane/internal/policy/policy_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/control-plane-api"
-  - "smith-gray/sidecar-resolution"
-  - "smith-gray/audit-logging"
+  - smith-gray/control-plane-api
+  - smith-gray/sidecar-resolution
+  - smith-gray/audit-logging

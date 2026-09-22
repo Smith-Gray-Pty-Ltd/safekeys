@@ -10,17 +10,18 @@ summary: |
   a resolve, then zeroises both the DEK and the plaintext.
 $system: smith-gray/system
 $service: smith-gray/sidecar
-status: planned
+status: built
 intent: |
   Rotating or revoking a master key must not require re-encrypting every secret ever stored, and a
   compromised DEK must expose only one object. Envelope encryption gives per-object key isolation
   and a single small set of KEKs to protect, which is also the shape that later lets the KEK live in
   a secure element or be reconstructed under threshold policy without touching the data.
-
 flows:
   - id: wrap-dek
     name: Wrap a data encryption key
-    description: A new DEK is generated locally and wrapped by the KEK without leaving the key store's trust boundary.
+    description: >-
+      A new DEK is generated locally and wrapped by the KEK without leaving the key store's trust
+      boundary.
     steps:
       - id: s1
         action: generate
@@ -30,7 +31,9 @@ flows:
         target: Encrypt the plaintext object with the DEK.
       - id: s3
         action: send
-        target: Send the DEK to the key store for wrapping under the KEK; only the wrapped form is persisted.
+        target: >-
+          Send the DEK to the key store for wrapping under the KEK; only the wrapped form is
+          persisted.
       - id: s4
         action: observe
         target: Plaintext is discarded from memory after encryption.
@@ -50,10 +53,11 @@ flows:
       - id: s4
         action: delete
         target: Zeroise the DEK and the plaintext buffer once injection completes.
-
 contracts:
   - id: kek-never-leaves-store
-    description: The long-term key-encryption key must never be exported from the key store in the MVP, and never leave the secure element in later phases.
+    description: >-
+      The long-term key-encryption key must never be exported from the key store in the MVP, and
+      never leave the secure element in later phases.
     must_have:
       - Only wrapped DEKs are persisted outside the key store
       - The sidecar receives unwrapped DEKs transiently, never KEKs
@@ -76,7 +80,6 @@ contracts:
       - The root key store is self-hosted, then an HSM or secure element
       - The MVP key store is OpenBao or Vault, not a model provider's KMS
       - Documented explicitly so an integrator does not substitute a provider KMS
-
 tests:
   - id: kek-not-exportable
     flow: wrap-dek
@@ -114,28 +117,33 @@ tests:
       - assertion: no cached or fallback plaintext is used
     contracts:
       - transient-and-zeroised
-
 decisions:
   - id: openbao-or-vault
     decision: Use OpenBao or Vault Transit/KV as the MVP key store.
-    rationale: Mature, self-hostable, and auditable, with wrapping primitives already available. Auto-unseal comes later. It avoids building a key store before proving the protocol.
+    rationale: >-
+      Mature, self-hostable, and auditable, with wrapping primitives already available. Auto-unseal
+      comes later. It avoids building a key store before proving the protocol.
     alternatives:
       - option: AWS KMS / cloud provider KMS
-        rejected_because: It puts the root of trust in a provider the customer may not control, and a multi-tenant AI-cloud KMS in particular could be reachable by the model provider — defeating the product's core property.
+        rejected_because: >-
+          It puts the root of trust in a provider the customer may not control, and a multi-tenant
+          AI-cloud KMS in particular could be reachable by the model provider — defeating the
+          product's core property.
       - option: Build a bespoke key store
         rejected_because: It slows the MVP and adds an unreviewed crypto component on the most sensitive path.
     status: accepted
   - id: envelope-not-direct
     decision: Wrap keys rather than encrypting secrets directly under a master key.
-    rationale: Envelope encryption keeps per-object isolation and makes master key rotation cheap, which is also the structure required to move the KEK into hardware or threshold custody without changing the data layer.
+    rationale: >-
+      Envelope encryption keeps per-object isolation and makes master key rotation cheap, which is
+      also the structure required to move the KEK into hardware or threshold custody without
+      changing the data layer.
     status: accepted
-
 implementation:
-  primary: apps/control-plane/internal/keystore
-  test_code: ""
-  test_code_status: none
-
+  primary: pkg/protocol/envelope.go
+  test_code: pkg/protocol/protocol_test.go
+  test_code_status: manual
 see_also:
-  - "smith-gray/encrypted-folder"
-  - "smith-gray/sidecar-resolution"
-  - "smith-gray/hardware-root"
+  - smith-gray/encrypted-folder
+  - smith-gray/sidecar-resolution
+  - smith-gray/hardware-root
