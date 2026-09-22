@@ -1,0 +1,264 @@
+{
+  "$schema": "https://safekeys.ai/spec/capability-token/v1.vectors.schema.json",
+  "format": "capability-token",
+  "version": "1",
+  "$comment": "Language-neutral conformance vectors for the Safekeys capability token v1. Run as a table-driven test. 'expect.schema' is a pure JSON Schema result (any validator). 'expect.resolve' is a SEMANTIC result requiring an implementation: TTL bounds, audience match, sid/path agreement, alg allowlist, revocation. Both are recorded so a partial implementation cannot silently pass.",
+  "now": 1790010000,
+  "vectors": [
+    {
+      "id": "valid-read-token",
+      "description": "A minimal well-formed read token. Schema valid, resolvable.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sub": "smith-gray/agent-a",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_9c1d4e7a2b"
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "valid-inject-env-token",
+      "description": "Env injection is a legitimate single scope.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["inject-env"],
+        "aud": "env-production",
+        "exp": 1790011800,
+        "nbf": 1790009900,
+        "jti": "jti_a1b2c3d4e5"
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "valid-multi-scope-token",
+      "description": "A token may carry more than one scope, up to the maximum of 5.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_folder_01",
+        "scope": ["read", "unwrap", "inject-file", "sign"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_multi_scope_1"
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+
+    {
+      "id": "expired-token",
+      "description": "NEGATIVE — well-formed but past exp. Schema valid, must be denied.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790009000,
+        "nbf": 1790008000,
+        "jti": "jti_expired_0001"
+      },
+      "expect": { "schema": "valid", "resolve": "denied", "reason": "exp" }
+    },
+    {
+      "id": "not-yet-valid-token",
+      "description": "NEGATIVE — nbf is in the future relative to 'now'.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790010900,
+        "jti": "jti_future_0001"
+      },
+      "expect": { "schema": "valid", "resolve": "denied", "reason": "nbf" }
+    },
+    {
+      "id": "wrong-audience",
+      "description": "NEGATIVE — token bound to a different resolver/environment.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-production",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_wrong_aud_01"
+      },
+      "expect": { "schema": "valid", "resolve": "denied", "reason": "aud" }
+    },
+    {
+      "id": "revoked-jti",
+      "description": "NEGATIVE — a structural no-op; denial comes from the denylist, not the claims. Proves revocation is enforced independently of TTL.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_revoked_0001"
+      },
+      "revoked": ["jti_revoked_0001"],
+      "expect": { "schema": "valid", "resolve": "denied", "reason": "revoked" }
+    },
+    {
+      "id": "sid-path-mismatch",
+      "description": "NEGATIVE — the JWS claims sid differs from the <sid> in the URI path. A confused-deputy attempt: a valid token for object A presented as a handle for object B. MUST be denied; this is not a schema error, it is a verification failure.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_sid_mismatch1"
+      },
+      "uri_sid": "obj_00000000",
+      "expect": { "schema": "valid", "resolve": "denied", "reason": "sid_path_mismatch" }
+    },
+
+    {
+      "id": "secret-material-in-token",
+      "description": "NEGATIVE — the cardinal rule. A token carrying a secret value MUST fail schema validation, because additionalProperties is false. If this vector ever passes as valid, the format has been broken and no token can be trusted.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_with_secret_1",
+        "value": "super-secret-value"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "additionalProperties" }
+    },
+    {
+      "id": "dek-material-in-token",
+      "description": "NEGATIVE — a token carrying a data encryption key MUST fail schema validation.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["unwrap"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_with_dek_0001",
+        "dek": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "additionalProperties" }
+    },
+
+    {
+      "id": "missing-exp",
+      "description": "NEGATIVE — exp is required; an unbounded token must not validate.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "nbf": 1790009900,
+        "jti": "jti_no_exp_000001"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "required" }
+    },
+    {
+      "id": "empty-scope",
+      "description": "NEGATIVE — an empty scope array grants nothing and is not a valid token.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": [],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_empty_scope_1"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "minItems" }
+    },
+    {
+      "id": "unknown-scope",
+      "description": "NEGATIVE — scope is a closed enum; an invented operation must not validate.",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read", "exfiltrate"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_bad_scope_001"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "enum" }
+    },
+    {
+      "id": "duplicate-scopes",
+      "description": "NEGATIVE — duplicate scope entries are rejected (uniqueItems).",
+      "input": {
+        "iss": "https://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read", "read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_dup_scope_001"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "uniqueItems" }
+    },
+    {
+      "id": "insecure-issuer",
+      "description": "NEGATIVE — iss must be https. A plaintext issuer is a downgrade vector.",
+      "input": {
+        "iss": "http://cp.safekeys.ai",
+        "sid": "obj_7f3a91c2",
+        "scope": ["read"],
+        "aud": "env-staging",
+        "exp": 1790013600,
+        "nbf": 1790009900,
+        "jti": "jti_bad_issuer_01"
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "pattern" }
+    }
+  ],
+  "header_vectors": [
+    {
+      "id": "reject-alg-none",
+      "description": "NEGATIVE — the classic JWT attack. alg 'none' MUST be rejected even though the JWS is structurally well-formed.",
+      "header": { "alg": "none", "kid": "k1", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "alg_not_allowed" }
+    },
+    {
+      "id": "reject-hmac-alg",
+      "description": "NEGATIVE — symmetric algorithms MUST be rejected. Accepting HS256 lets a verifier be tricked into treating a public key as a shared secret.",
+      "header": { "alg": "HS256", "kid": "k1", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "alg_not_allowed" }
+    },
+    {
+      "id": "reject-alg-confusion-hs512",
+      "description": "NEGATIVE — same class as above, HS512.",
+      "header": { "alg": "HS512", "kid": "k1", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "alg_not_allowed" }
+    },
+    {
+      "id": "accept-eddsa",
+      "description": "EdDSA is permitted by the allowlist.",
+      "header": { "alg": "EdDSA", "kid": "k1", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "accept-es256",
+      "description": "ES256 is permitted by the allowlist — the FIPS-oriented choice.",
+      "header": { "alg": "ES256", "kid": "k1", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "reject-missing-kid",
+      "description": "NEGATIVE — kid is required so the verification key can be resolved. An unresolvable token MUST be denied.",
+      "header": { "alg": "EdDSA", "typ": "safekey-token+jws" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "kid_missing" }
+    }
+  ]
+}

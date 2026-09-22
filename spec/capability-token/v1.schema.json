@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://safekeys.ai/spec/capability-token/v1.schema.json",
+  "title": "Safekeys Capability Token v1 — Claims Set",
+  "description": "The JWS payload (claims set) of a Safekeys capability token. A token is carried as safekey://v1/<sid>#<JWS> where <JWS> is an RFC 7515 compact JWS whose payload validates against this schema. This schema validates the DECODED claims set, not the compact serialisation. INVARIANT: no field may carry plaintext, an unwrapped data encryption key (DEK), or a key-encryption key (KEK). additionalProperties is false so a field cannot be smuggled in.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["iss", "sid", "scope", "aud", "exp", "nbf", "jti"],
+  "properties": {
+    "iss": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://",
+      "description": "Issuer — the control plane that minted the token. Used to resolve the verification key set. MUST be https.",
+      "examples": ["https://cp.safekeys.ai"]
+    },
+    "sub": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "Subject — the principal the token was issued to (e.g. an agent identity or operator). Optional but strongly recommended for attribution; when absent, the audit record's requester is the sidecar's local peer identity.",
+      "examples": ["smith-gray/agent-a"]
+    },
+    "sid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "description": "Secret or folder object identifier. MUST match the <sid> in the URI path — a mismatch is a verification failure."
+    },
+    "scope": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "enum": ["read", "unwrap", "inject-env", "inject-file", "sign"]
+      },
+      "description": "Granted operations, enforced as least privilege. Issuers SHOULD emit the smallest set that satisfies the request; a resolver MUST deny any operation not present. Over-broad sets are a policy failure, not a format feature."
+    },
+    "aud": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Audience — the intended resolver identity or environment. A resolver MUST reject a token whose aud does not match its own identity. Binds authority to one environment so a staging token cannot be used in production."
+    },
+    "exp": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Expiry — NumericDate (seconds since Unix epoch). Resolvers MUST reject once the current time is past exp. TTLs are minutes to hours, never days."
+    },
+    "nbf": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Not before — NumericDate (seconds since Unix epoch). A resolver MUST reject before this time. MUST be less than or equal to exp."
+    },
+    "jti": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Unique token identifier for replay control and revocation. MUST be recorded at mint time so it can be denylisted. MUST be unique across all tokens ever issued by an issuer."
+    }
+  },
+  "$comment": "Header constraints are NOT expressible in this schema and MUST be enforced by the verifier: alg MUST be in the allowlist ['EdDSA','ES256']; alg 'none', 'HS256', 'HS384', 'HS512' and any symmetric algorithm MUST be rejected; kid MUST be present and resolve to a known verification key; typ MUST be 'safekey-token+jws' when present. See README.md and v1.vectors.json."
+}

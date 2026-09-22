@@ -16,7 +16,7 @@ paths:
   - apps/control-plane
 depends_on:
   - key-store
-  - postgres
+  - control-plane-db
 
 tech_stack:
   language: Go

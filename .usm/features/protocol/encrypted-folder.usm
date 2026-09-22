@@ -16,7 +16,6 @@ intent: |
   agent handoffs — without each hop being a new exposure. Making the transport unit an inert
   ciphertext container means the risky part of the journey (copying) carries no risk at all, and the
   only sensitive operation (resolve) is gated by a token and a privileged process.
-
 flows:
   - id: build-folder
     name: Build an encrypted folder
@@ -27,7 +26,9 @@ flows:
         target: For each secret, generate a random DEK and encrypt the plaintext into objects/<id>.enc.
       - id: s2
         action: generate
-        target: Write manifest.json — object ids, content-type hints, token references, wrapping key ids, and hashes.
+        target: >-
+          Write manifest.json — object ids, content-type hints, token references, wrapping key ids,
+          and hashes.
       - id: s3
         action: generate
         target: Write README.safekeys describing the folder for humans and agents, containing no secrets.
@@ -47,7 +48,6 @@ flows:
       - id: s3
         action: observe
         target: Cryptographic exposure is unchanged by the copy.
-
 contracts:
   - id: folder-is-inert
     description: A folder on its own must be useless without a live token and a reachable key authority.
@@ -67,7 +67,6 @@ contracts:
       - Explains what the folder is and how to use it
       - Contains no secrets and no key material
       - Safe to surface in an agent's context
-
 tests:
   - id: folder-copy-yields-nothing
     flow: copy-folder
@@ -94,27 +93,60 @@ tests:
       - assertion: pasting README.safekeys into a model context exposes nothing sensitive
     contracts:
       - readme-is-agent-safe
-
 decisions:
   - id: ordinary-directory
     decision: Use an ordinary directory or object prefix rather than a custom container format.
-    rationale: Any filesystem, object store, or artefact system can carry it with no adapter, and tooling (diff, sync, tar) works unchanged. The security comes from the contents being ciphertext, not from the container.
+    rationale: >-
+      Any filesystem, object store, or artefact system can carry it with no adapter, and tooling
+      (diff, sync, tar) works unchanged. The security comes from the contents being ciphertext, not
+      from the container.
     status: accepted
   - id: aes-gcm-or-chacha
     decision: Encrypt objects with AES-256-GCM or ChaCha20-Poly1305.
-    rationale: Both are AEAD constructions with wide hardware acceleration and mature library support, giving confidentiality and integrity without bespoke crypto.
+    rationale: >-
+      Both are AEAD constructions with wide hardware acceleration and mature library support, giving
+      confidentiality and integrity without bespoke crypto.
     status: accepted
   - id: readme-is-a-feature
     decision: Ship a README.safekeys in every folder, designed to be model-readable.
-    rationale: Agents will encounter folders; a clear, secret-free explanation prevents an agent from attempting to extract values or misusing the folder, and keeps the folder self-describing in handoffs.
+    rationale: >-
+      Agents will encounter folders; a clear, secret-free explanation prevents an agent from
+      attempting to extract values or misusing the folder, and keeps the folder self-describing in
+      handoffs.
     status: accepted
-
+  - id: manifest-is-metadata-only
+    decision: >-
+      The manifest may hold a wrapped DEK but never plaintext, an unwrapped DEK, or a KEK, enforced
+      structurally via additionalProperties: false.
+    rationale: >-
+      Envelope-wrapped keys are useless without the KEK, which never leaves the key store, so
+      permitting them lets the folder be a self-contained transport unit while granting nothing on
+      its own. Forbidding everything else means a manifest can be leaked in full without exposing a
+      secret. Schema-level rejection is stronger than a documented rule because it cannot be
+      misconfigured.
+    consequences: >-
+      An implementation that encounters an unwrapped DEK in a manifest must refuse and log a
+      security event, since it indicates a compromised writer. Conformance vectors assert the
+      negative cases.
+    status: accepted
+    date: "2026-09-22"
+  - id: objects-path-constraint
+    decision: Require every object path to match ^objects/[A-Za-z0-9][A-Za-z0-9._-]*\.enc$.
+    rationale: >-
+      A path constraint prevents two failure modes at once: an unencrypted file masquerading as
+      ciphertext, and path traversal escaping the folder. Both are structural, so the schema can
+      reject them before any code runs.
+    consequences: >-
+      Folders must keep ciphertext strictly under objects/ with an .enc suffix. Enforced by the
+      path-traversal and unencrypted-object-path conformance vectors.
+    status: accepted
+    date: "2026-09-22"
 implementation:
   primary: apps/sidecar/internal/resolve
   test_code: ""
   test_code_status: none
-
 see_also:
-  - "smith-gray/envelope-encryption"
-  - "smith-gray/secret-transport"
-  - "smith-gray/capability-token"
+  - smith-gray/envelope-encryption
+  - smith-gray/secret-transport
+  - smith-gray/capability-token
+  - smith-gray/control-plane-db

@@ -1,0 +1,276 @@
+{
+  "$schema": "https://safekeys.ai/spec/encrypted-folder/v1.vectors.schema.json",
+  "format": "encrypted-folder",
+  "version": "1",
+  "$comment": "Language-neutral conformance vectors for the Safekeys encrypted folder manifest v1. 'expect.schema' is a pure JSON Schema result (any validator). 'expect.resolve' is a SEMANTIC result requiring an implementation: token presence and validity, KEK availability. Both recorded so a partial implementation cannot silently pass.",
+  "now": 1790010000,
+  "vectors": [
+    {
+      "id": "valid-single-object",
+      "description": "A minimal well-formed single-object folder with a wrapped key and wrapping kid.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f7081a2b3c4d5e6f7081a2b3c4d5e6f7081a2b3c4d5e6f708",
+            "wrapping_kid": "kek-prod-2026-01",
+            "content_type": "text/plain",
+            "hash": "sha256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=",
+            "size": 512
+          }
+        ]
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "valid-chacha-object",
+      "description": "ChaCha20-Poly1305 is a permitted AEAD alternative.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_chacha_0001",
+            "path": "objects/obj_chacha_0001.enc",
+            "alg": "ChaCha20-Poly1305",
+            "wrapped_key": "vault:v1:aa11bb22cc33dd44ee55ff6600",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ]
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "valid-multi-object-folder",
+      "description": "A folder may hold multiple objects and carry folder-level metadata.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_kubeconfig",
+            "path": "objects/obj_kubeconfig.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:1122334455667788990011",
+            "wrapping_kid": "kek-prod-2026-01",
+            "content_type": "application/yaml"
+          },
+          {
+            "id": "obj_cert",
+            "path": "objects/obj_cert.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:2233445566778899001122",
+            "wrapping_kid": "kek-prod-2026-01",
+            "content_type": "application/x-pem-file"
+          }
+        ],
+        "folder": {
+          "id": "folder_deploy_creds",
+          "description": "Deployment credentials for the staging cluster. Contains two objects.",
+          "created": "2026-09-22T05:00:00Z"
+        },
+        "authority": {
+          "issuer": "https://cp.safekeys.ai",
+          "scope": "env-staging"
+        }
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+    {
+      "id": "valid-with-token-reference",
+      "description": "A token reference is a discovery handle, not authority. Permitted.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01",
+            "token_references": ["safekey://v1/obj_7f3a91c2"]
+          }
+        ]
+      },
+      "expect": { "schema": "valid", "resolve": "allowed", "reason": null }
+    },
+
+    {
+      "id": "plaintext-in-manifest",
+      "description": "NEGATIVE — the cardinal rule. A manifest carrying a plaintext secret MUST fail schema validation (additionalProperties is false). If this vector ever passes as valid, the folder format has been broken.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01",
+            "value": "super-secret-value"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "additionalProperties" }
+    },
+    {
+      "id": "unwrapped-dek-in-manifest",
+      "description": "NEGATIVE — an unwrapped DEK field MUST fail schema validation. Only a wrapped_key is permitted. An implementation finding an unwrapped DEK MUST refuse and log a security event.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01",
+            "dek": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "additionalProperties" }
+    },
+    {
+      "id": "kek-in-manifest",
+      "description": "NEGATIVE — a key-encryption key MUST never appear in a folder. Long-term key material lives in the key store or a secure element.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ],
+        "kek": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "additionalProperties" }
+    },
+
+    {
+      "id": "unencrypted-object-path",
+      "description": "NEGATIVE — an object path that is not under objects/ or does not end in .enc would allow a plaintext file to masquerade as ciphertext.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "secrets/plain.txt",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "pattern" }
+    },
+    {
+      "id": "path-traversal",
+      "description": "NEGATIVE — a traversal path could escape the folder.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/../../etc/passwd.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "pattern" }
+    },
+    {
+      "id": "unsupported-algorithm",
+      "description": "NEGATIVE — alg is a closed enum. An unapproved or non-AEAD cipher must not validate.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-CBC",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "enum" }
+    },
+    {
+      "id": "unknown-format-version",
+      "description": "NEGATIVE — a future/unknown format version must be refused rather than parsed best-effort.",
+      "input": {
+        "safekeys": "2",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM",
+            "wrapped_key": "vault:v1:8f3c2a1b9d4e6f70",
+            "wrapping_kid": "kek-prod-2026-01"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "denied", "reason": "unsupported_version" }
+    },
+    {
+      "id": "empty-objects",
+      "description": "NEGATIVE — a folder must contain at least one object.",
+      "input": { "safekeys": "1", "objects": [] },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "minItems" }
+    },
+    {
+      "id": "missing-wrapped-key",
+      "description": "NEGATIVE — an object without a wrapped key can never be resolved.",
+      "input": {
+        "safekeys": "1",
+        "objects": [
+          {
+            "id": "obj_7f3a91c2",
+            "path": "objects/obj_7f3a91c2.enc",
+            "alg": "AES-256-GCM"
+          }
+        ]
+      },
+      "expect": { "schema": "invalid", "resolve": "n/a", "reason": "required" }
+    }
+  ],
+
+  "folder_vectors": [
+    {
+      "id": "inert-without-token",
+      "description": "SEMANTIC — a well-formed folder with no live token MUST yield nothing. Proves copying/possession alone is inert.",
+      "input": { "manifest": "valid-single-object", "token": null, "keystore": "reachable" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "no_token" }
+    },
+    {
+      "id": "inert-without-keystore",
+      "description": "SEMANTIC — a valid token but no reachable key authority MUST fail closed. No cached or fallback plaintext.",
+      "input": { "manifest": "valid-single-object", "token": "valid", "keystore": "unreachable" },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "keystore_unreachable" }
+    },
+    {
+      "id": "inert-without-sidecar",
+      "description": "SEMANTIC — a folder plus a valid token but no sidecar MUST yield nothing. The sidecar is the only component permitted to resolve.",
+      "input": { "manifest": "valid-single-object", "token": "valid", "sidecar": false },
+      "expect": { "schema": "n/a", "resolve": "denied", "reason": "no_resolver" }
+    },
+    {
+      "id": "copy-yields-nothing",
+      "description": "SEMANTIC — reading every file in a copied folder without a sidecar yields no secret and no key material.",
+      "input": { "operation": "read_all_files_in_copied_folder" },
+      "expect": { "schema": "n/a", "resolve": "n/a", "reason": null },
+      "assertions": [
+        "no plaintext recovered",
+        "no unwrapped DEK recovered",
+        "no KEK recovered"
+      ]
+    }
+  ]
+}

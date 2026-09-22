@@ -15,7 +15,6 @@ intent: |
   receiving plaintext or long-term keys. A token decouples "the right to use a secret" from "the
   secret" itself, so authority can travel through untrusted channels — model context, logs, MCP
   buses — while the value cannot.
-
 flows:
   - id: mint-token
     name: Mint a capability token
@@ -26,7 +25,9 @@ flows:
         target: Control plane receives an object id, requested scope, audience, and TTL from the sidecar.
       - id: s2
         action: validate
-        target: Policy is evaluated — is this requester allowed to mint this scope for this object and audience?
+        target: >-
+          Policy is evaluated — is this requester allowed to mint this scope for this object and
+          audience?
       - id: s3
         action: generate
         target: Generate claims (sid, scope, aud, exp, nbf, jti) and sign with the active kid.
@@ -58,14 +59,17 @@ flows:
       - id: s6
         action: observe
         target: On any failure, deny by default without revealing why beyond a generic denial code.
-
 contracts:
   - id: token-contains-no-secrets
     description: A capability token must never contain plaintext, key material, or anything that yields it.
     must_have:
-      - Claims are limited to object identifier, scope, audience, time bounds, unique id, and signature
+      - >-
+        Claims are limited to object identifier, scope, audience, time bounds, unique id, and
+        signature
       - No field may carry the secret value, a DEK, or a KEK
-      - A token captured from a prompt or log is not sufficient to decrypt a folder without a reachable sidecar and key authority
+      - >-
+        A token captured from a prompt or log is not sufficient to decrypt a folder without a
+        reachable sidecar and key authority
   - id: short-lived-and-scoped
     description: Tokens are least-privilege and short-lived by construction.
     must_have:
@@ -84,12 +88,11 @@ contracts:
       - Tokens are signed and carry a key id
       - Signature verification happens before any key-store interaction
       - An unverifiable token is denied
-
 tests:
   - id: token-has-no-secret-material
     flow: mint-token
     setup:
-      secret_value: "super-secret-value"
+      secret_value: super-secret-value
     expect:
       - assertion: the minted token string does not contain the secret value in any encoding
       - assertion: decoding the token yields only the declared claims
@@ -109,8 +112,8 @@ tests:
   - id: wrong-audience-denied
     flow: verify-token
     setup:
-      aud: "env-production"
-      resolver_identity: "env-staging"
+      aud: env-production
+      resolver_identity: env-staging
     expect:
       - assertion: resolution is denied
       - assertion: no plaintext is materialised
@@ -125,27 +128,105 @@ tests:
       - assertion: resolution is denied even though the token has not expired
     contracts:
       - revocable
-
 decisions:
   - id: uri-form
     decision: "Express tokens as a URI: safekey://v1/<id>?scope=<action>&aud=<env>&exp=<unix>&kid=<key-id>"
-    rationale: A URI is copyable through any transport, self-describing, and easy to redact in logs by matching a prefix. It makes the token obviously a handle rather than a value.
+    rationale: >-
+      A URI is copyable through any transport, self-describing, and easy to redact in logs by
+      matching a prefix. It makes the token obviously a handle rather than a value.
     status: accepted
   - id: short-ttl-over-long-lived
     decision: Use short TTL plus a jti denylist rather than long-lived tokens with periodic rotation.
-    rationale: Short TTL bounds the damage window of a leaked token; the denylist provides immediate revocation for the cases where waiting is unacceptable. Together they cover both the common and the urgent case.
+    rationale: >-
+      Short TTL bounds the damage window of a leaked token; the denylist provides immediate
+      revocation for the cases where waiting is unacceptable. Together they cover both the common
+      and the urgent case.
     status: accepted
   - id: generic-denials
     decision: Denials return a generic failure rather than the specific violated check.
     rationale: Detailed denial reasons are a probing oracle for an attacker refining a forged token.
     status: accepted
-
+  - id: jws-over-query-string
+    decision: >-
+      Carry the token as a standard RFC 7515 compact JWS in the URI fragment
+      (safekey://v1/<sid>#<JWS>) rather than the blueprint's bespoke query-string claims with a
+      separate sig claim.
+    rationale: >-
+      The blueprint's form is a bespoke signed-URL scheme: neither the canonicalisation of the
+      signed bytes nor the parameter ordering/escaping is defined by any standard, so every
+      implementation would have to reproduce our rules byte-for-byte and a mismatch in one language
+      would be a silent authorisation bypass. JWS moves that risk into reviewed, widely implemented
+      libraries. Decisively for this product, standardisation is what makes government-grade
+      assurance reachable: FIPS 140-3 validated modules support EdDSA/ES256 but no private format,
+      an auditor can verify RFC 7515 conformance quickly, third-party resolvers and HSMs
+      interoperate on day one, and the format outlives the team. The blueprint's semantics (sid,
+      scope, aud, exp, nbf, jti) are preserved exactly; only the signing envelope changes.
+    alternatives:
+      - option: >-
+          Literal query-string form from the blueprint
+          (safekey://v1/<id>?scope=…&aud=…&exp=…&kid=…&sig=…)
+        rejected_because: >-
+          Bespoke signed-URL construction with no standard covering canonicalisation or signing
+          rules — we would own a crypto-critical parsing and signing surface. No FIPS story,
+          expensive to audit, and a canonicalisation mismatch between implementations is a silent
+          auth bypass.
+      - option: JWS carried as a query parameter rather than a fragment
+        rejected_because: >-
+          Standard, but base64url-heavy JWS bloats the URL and risks truncation by intermediaries;
+          the fragment also keeps the credential out of server logs and proxy records by
+          construction.
+      - option: Custom binary token format
+        rejected_because: >-
+          Maximum control at maximum cost: no library support, no interoperability, and an entirely
+          novel format to audit.
+    consequences: >-
+      One deliberate deviation from the blueprint's documented wire format, recorded as an ADR.
+      Implementations must enforce the alg allowlist and kid resolution, which are header-level
+      concerns not expressible in the claims schema. Format is frozen at v1 and additive-only.
+    status: accepted
+    date: "2026-09-22"
+  - id: alg-allowlist
+    decision: Permit only EdDSA and ES256; reject alg 'none' and all symmetric algorithms (HS256/384/512).
+    rationale: >-
+      alg: none is the classic JWT attack, and accepting a symmetric algorithm lets a verifier be
+      tricked into treating a published verification key as a shared secret (algorithm-confusion). A
+      closed allowlist makes both classes of bug unreachable rather than merely discouraged. EdDSA
+      is the modern default; ES256 is permitted for FIPS-oriented deployments.
+    alternatives:
+      - option: Trust the token's own alg header and verify accordingly
+        rejected_because: >-
+          This is precisely the algorithm-confusion vulnerability — the attacker chooses the
+          verification algorithm.
+      - option: Accept any asymmetric algorithm
+        rejected_because: >-
+          Unbounded risk surface, including weak or deprecated curves, with no way to reason about
+          the whole set.
+    consequences: >-
+      Adding an algorithm is a new major format version. Header constraints are enforced by the
+      verifier, not the claims schema, and are covered by header conformance vectors.
+    status: accepted
+    date: "2026-09-22"
+  - id: key-custody-hsm
+    decision: >-
+      Require the token signing key to be HSM- or secure-element-backed from Phase 1; never a bare
+      file in production.
+    rationale: >-
+      The token format protects the authority of the signature, so the signature's key is the root
+      of that authority. A key on disk is exfiltratable by the same host compromise the rest of the
+      architecture is designed to survive. Custody is where government-grade assurance actually
+      originates — algorithm choice, key custody, and sidecar enforcement — not the envelope
+      encoding.
+    consequences: >-
+      kid resolution must support an HSM-backed key source. No format change; only where the key
+      lives. Recorded so an integrator does not ship a file-based signing key in production.
+    status: accepted
+    date: "2026-09-22"
 implementation:
   primary: apps/control-plane/internal/token
   test_code: ""
   test_code_status: none
-
 see_also:
-  - "smith-gray/secret-transport"
-  - "smith-gray/token-revocation"
-  - "smith-gray/sidecar-resolution"
+  - smith-gray/secret-transport
+  - smith-gray/token-revocation
+  - smith-gray/sidecar-resolution
+  - smith-gray/control-plane-db

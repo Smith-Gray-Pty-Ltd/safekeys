@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://safekeys.ai/spec/encrypted-folder/v1.schema.json",
+  "title": "Safekeys Encrypted Folder Manifest v1",
+  "description": "The manifest.json of a Safekeys folder. A folder is an ordinary directory holding ciphertext blobs, this manifest, and a README.safekeys. Copying a folder increases no cryptographic exposure: it is inert without a live token AND a reachable sidecar AND a key authority. INVARIANT: the manifest is metadata only. It MUST NOT contain plaintext, an unwrapped DEK, or a KEK. additionalProperties is false so material cannot be smuggled in. Note that wrapped (envelope-encrypted) DEKs are permitted — they are useless without the KEK.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["safekeys", "objects"],
+  "properties": {
+    "safekeys": {
+      "type": "string",
+      "const": "1",
+      "description": "Format version of this manifest. A resolver MUST refuse a version it does not implement rather than attempting best-effort parsing."
+    },
+    "objects": {
+      "type": "array",
+      "minItems": 1,
+      "description": "The ciphertext objects in this folder. Objects are inert blobs; the manifest describes them but cannot decrypt them.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "alg", "wrapped_key"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            "description": "Object identifier. Referenced by a token's sid, and by token_references below."
+          },
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^objects/[A-Za-z0-9][A-Za-z0-9._-]*\\.enc$",
+            "description": "Relative path to the ciphertext blob. MUST be under objects/ and MUST end in .enc — never an unencrypted file."
+          },
+          "alg": {
+            "type": "string",
+            "enum": ["AES-256-GCM", "ChaCha20-Poly1305"],
+            "description": "AEAD algorithm used for this object. Both are permitted; AES-256-GCM is the FIPS-oriented choice, ChaCha20-Poly1305 the constant-time-in-software choice."
+          },
+          "wrapped_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192,
+            "pattern": "^[A-Za-z0-9+/=_:.-]+$",
+            "description": "Envelope-wrapped data encryption key (DEK). PERMITTED because it is wrapped: it is useless without the KEK, which never leaves the key store. This is the only key-shaped field allowed in a folder. Implementations SHOULD use their key store's native wrapped-key encoding (e.g. Vault transit 'vault:v1:…'), so the pattern permits base64 plus common separator characters."
+          },
+          "wrapping_kid": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "Identifier of the KEK that wrapped this DEK. Enables rotation and multi-authority resolution. REQUIRED in practice once more than one KEK exists; optional only for single-KEK folders."
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 255,
+            "description": "Hint describing the plaintext's media type, e.g. text/plain or application/x-pem-file. A hint only — implementations MUST NOT use it to decide whether to decrypt."
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+:[A-Za-z0-9+/=_-]+$",
+            "description": "Integrity hash of the ciphertext blob, as <algo>:<base64>, e.g. sha256:…. Optional; AEAD already provides integrity. Useful for sync and dedup.",
+            "examples": ["sha256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="]
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Size of the ciphertext blob in bytes. Optional; a transport hint."
+          },
+          "token_references": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "maxLength": 4096,
+              "pattern": "^safekey://v1/",
+              "description": "A safekey:// URI. Note this is a REFERENCE, not a live credential — a token embedded here is still subject to expiry, audience, and revocation at resolve time."
+            },
+            "description": "Optional references to tokens that may be used with this object. These are handles for discovery/auditing, never authority in themselves."
+          }
+        }
+      }
+    },
+    "folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional description of the folder as a whole, for multi-object folders.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+          "description": "Folder-level identifier, when the whole folder is treated as one transport unit."
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512,
+          "description": "A secret-free description of what this folder contains. Safe for model context."
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC 3339 creation timestamp (UTC)."
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional pointer to the authority that can unwrap. A hint for operators; NOT a credential. Possessing this does not grant resolution.",
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "description": "Control plane issuer expected to mint tokens for this folder."
+        },
+        "scope": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Logical environment or tenant this folder belongs to."
+        }
+      }
+    }
+  },
+  "$comment": "Enforced by the implementation, NOT expressible in this schema: (1) every path in objects[].path MUST exist on disk and MUST be ciphertext; (2) no file outside objects/*.enc may be introduced; (3) README.safekeys MUST be present and MUST contain no secret material; (4) a 'wrapped_key' MUST NOT be unwrappable without the KEK — an implementation that finds an unwrapped DEK in a manifest MUST refuse to proceed and MUST log a security event."
+}

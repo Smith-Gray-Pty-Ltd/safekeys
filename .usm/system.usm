@@ -83,7 +83,7 @@ services:
     type: api
     depends_on:
       - key-store
-      - postgres
+      - control-plane-db
   - id: sidecar
     name: Sidecar / Resolver
     ref: apps/sidecar
@@ -132,9 +132,10 @@ services:
     ref: https://openbao.org
     type: external
     depends_on: []
-  - id: postgres
-    name: Postgres
-    ref: https://www.postgresql.org
+  - id: control-plane-db
+    name: Control Plane Database
+    ref: apps/control-plane/internal/store
+    port: 5432
     type: database
     depends_on: []
 
@@ -280,6 +281,11 @@ index:
     ref: .usm/features/integration/mcp-server.usm
     status: planned
     tags: [mcp, mvp, agents]
+  - id: control-plane-db
+    name: Control Plane Data Model
+    ref: .usm/services/control-plane-db.usm
+    status: planned
+    tags: [data, postgres, mvp]
   - id: hardening-hardware-root
     name: Hardware Root of Trust
     ref: .usm/features/hardening/hardware-root.usm
@@ -388,6 +394,123 @@ mandatory_reading:
     description: Agent workflow, USM spec-first rules, and the feedback protocol.
   - path: .usm/system.usm
     description: System identity, principles, services, and threat model.
+
+reference_pages:
+  - id: control-plane-data-model
+    title: Control Plane Data Model
+    audience: internal
+    content:
+      - type: paragraph
+        text: >-
+          The Postgres schema backing the control plane. It stores identifiers, policy, and outcomes
+          only — never plaintext, never an unwrapped key. Wrapped DEKs live in the folder manifest;
+          the KEK lives in the key store.
+      - type: callout
+        variant: warning
+        title: Invariant
+        text: >-
+          No table has a column capable of holding plaintext, a DEK, or a KEK. This is asserted by a
+          schema-level test in CI, not by convention.
+      - type: heading
+        level: 2
+        text: objects
+      - type: paragraph
+        text: Registered secret objects. One row per object or folder.
+      - type: table
+        headers: ["Column", "Type", "Notes"]
+        rows:
+          - ["id", "text PK", "Object identifier; matches a token's sid. Pattern ^[A-Za-z0-9][A-Za-z0-9._:-]*$."]
+          - ["folder_id", "text NULL", "Groups objects into a folder transport unit."]
+          - ["owner_principal", "text", "Issuing principal for attribution (e.g. smith-gray/agent-a)."]
+          - ["content_type", "text NULL", "Hint mirrored from the manifest. Never used to gate decryption."]
+          - ["wrapping_kid", "text", "The KEK that wraps this object's DEK. Routes the unwrap; holds no key material."]
+          - ["created_at", "timestamptz", "Row creation."]
+          - ["revoked_at", "timestamptz NULL", "Set when the object is retired."]
+      - type: heading
+        level: 2
+        text: tokens
+      - type: paragraph
+        text: Issued capability tokens, keyed by the unique jti.
+      - type: table
+        headers: ["Column", "Type", "Notes"]
+        rows:
+          - ["jti", "text PK", "Unique token id. Never reused across issuers."]
+          - ["sid", "text FK", "Target object -> objects(id)."]
+          - ["iss", "text", "Issuer identifier."]
+          - ["sub", "text NULL", "Subject principal, for attribution."]
+          - ["scope", "text[]", "Granted scopes; subset of read, unwrap, inject-env, inject-file, sign."]
+          - ["aud", "text", "Audience / environment binding."]
+          - ["nbf", "timestamptz", "Not-before."]
+          - ["exp", "timestamptz", "Expiry. TTL is minutes to hours, never days."]
+          - ["issued_at", "timestamptz", "Mint time."]
+          - ["revoked_at", "timestamptz NULL", "Set on revocation. Non-null means denied."]
+      - type: callout
+        variant: info
+        title: Denylist index
+        text: >-
+          A partial index on (jti) WHERE revoked_at IS NOT NULL is the lookup that runs on every
+          resolve. It stays small because it holds only actively revoked ids, which is why v1 stores
+          a denylist rather than an allowlist of live tokens.
+      - type: heading
+        level: 2
+        text: audit
+      - type: paragraph
+        text: Append-only. No update or delete path is exposed through the application.
+      - type: table
+        headers: ["Column", "Type", "Notes"]
+        rows:
+          - ["id", "bigserial PK", "Monotonic; also the ordering key."]
+          - ["at", "timestamptz", "Event time."]
+          - ["event", "text", "issue, revoke, resolve, deny, or policy_deny."]
+          - ["jti", "text NULL", "Token involved, when applicable."]
+          - ["sid", "text NULL", "Object involved."]
+          - ["principal", "text NULL", "Requester."]
+          - ["host", "text NULL", "Resolving host."]
+          - ["scope", "text NULL", "Requested scope."]
+          - ["outcome", "text", "allowed or denied."]
+          - ["reason", "text NULL", "Machine-readable denial reason (exp, aud, revoked, ...)."]
+          - ["detail", "jsonb NULL", "Extra non-secret context. Validated against a denylist of keys before insert."]
+      - type: callout
+        variant: danger
+        title: Immutability by grant
+        text: >-
+          The application role has no UPDATE or DELETE grant on audit. Immutability is enforced by
+          database grant, not by application convention, so a compromised application cannot rewrite
+          history.
+      - type: heading
+        level: 2
+        text: policy_rules
+      - type: paragraph
+        text: Resolution policy, evaluated at issuance and again locally at resolve.
+      - type: table
+        headers: ["Column", "Type", "Notes"]
+        rows:
+          - ["id", "text PK", "Rule identifier; referenced in audit reason on denial."]
+          - ["effect", "text", "allow or deny."]
+          - ["principal", "text NULL", "Match requester (null = any)."]
+          - ["sid", "text NULL", "Match object (null = any)."]
+          - ["scope", "text[]", "Scopes this rule governs."]
+          - ["aud", "text NULL", "Audience / environment the rule applies to."]
+          - ["injection_method", "text NULL", "Restrict to one of env, file, socket, exec."]
+          - ["priority", "integer", "Evaluation order; higher wins."]
+          - ["created_at", "timestamptz", "Row creation."]
+      - type: heading
+        level: 2
+        text: Invariants
+      - type: steps
+        items:
+          - text: No secret material — no table has a column capable of holding plaintext, a DEK, or a KEK.
+          - text: Append-only audit — the application role has no UPDATE or DELETE grant on audit.
+          - text: Revocation is immediate — a resolve checks tokens.revoked_at and the denylist index in the same transaction as policy evaluation.
+          - text: Deny by default — policy_rules is an allow/deny list with no implicit permit.
+          - text: No orphan tokens — tokens.sid is a foreign key to objects.id.
+      - type: callout
+        variant: info
+        title: Why there is no wrapped_dek column
+        text: >-
+          The wrapped DEK lives in the folder's manifest.json, so the database never holds
+          key-shaped data and the folder stays the single portable unit. Postgres stores only
+          wrapping_kid — an identifier, not material — to route an unwrap to the right KEK.
 
 policies:
   refs:

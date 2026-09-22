@@ -9,6 +9,8 @@ Safekeys.ai — encrypted transport for secrets through environments, agentic fl
 
 - **Safekeys CLI** (api, go)
   Safekeys CLI — the operator and agent-facing command line (safekeys create, exec, revoke, list). It talks to the local sidecar over the Unix socket and to the control plane for token lifecycle, never handling plaintext except on the create path where it writes directly to the sidecar.
+- **Control Plane Database** (database, postgres)
+  Postgres data model for the control plane — objects, wrapping keys, token issuance, the jti revocation denylist, policy rules, and the append-only audit log. Stores identifiers, policy, and outcomes only: no plaintext, no unwrapped keys. Wrapped DEKs live with the folder; the KEK lives in the key store.
 - **Control Plane API** (api, go)
   Control Plane API — issues and revokes capability tokens, manages policy, and exposes the audit log. It never receives plaintext secrets. Built in Go on Postgres, authenticating sidecars and CLIs via API key in the MVP and mTLS later.
 - **Safekeys MCP Server** (api, node)
