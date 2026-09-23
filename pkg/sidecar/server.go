@@ -16,18 +16,50 @@ import (
 	"sync"
 	"time"
 
+	cpclient "github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/cpclient"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/created"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/resolve"
 )
 
-// Request is the wire form of a resolve request.
+// Operation names for the socket protocol. An empty op means "resolve", for
+// backward compatibility with the earliest clients.
+const (
+	OpResolve = "resolve"
+	OpCreate  = "create"
+	OpList    = "list"
+	OpRevoke  = "revoke"
+)
+
+// Request is the wire form of a sidecar request.
+//
+// For OpResolve, Token/Scope/Name/Command are used. For OpCreate,
+// SourceFile/ObjectID/ContentType/Scope/Audience/TTLSeconds are used — note
+// there is deliberately NO Value field: a create request names a source the
+// sidecar reads itself, so a model authoring the call never holds the bytes.
 type Request struct {
-	Token     string   `json:"token"`
-	Scope     string   `json:"scope"`
-	Name      string   `json:"name"`
-	Command   []string `json:"command"`
-	Principal string   `json:"principal"`
+	Op string `json:"op,omitempty"`
+
+	// resolve
+	Token   string   `json:"token,omitempty"`
+	Scope   string   `json:"scope,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Command []string `json:"command,omitempty"`
+
+	// create
+	ObjectID    string   `json:"object_id,omitempty"`
+	SourceFile  string   `json:"source_file,omitempty"`
+	ContentType string   `json:"content_type,omitempty"`
+	ScopeList   []string `json:"scope_list,omitempty"`
+	Audience    string   `json:"audience,omitempty"`
+	TTLSeconds  int      `json:"ttl_seconds,omitempty"`
+
+	// list / revoke
+	JTI string `json:"jti,omitempty"`
+
+	// common
+	Principal string `json:"principal,omitempty"`
 }
 
 // Response is the wire form of a resolve result.
@@ -41,6 +73,23 @@ type Response struct {
 	Stdout     []byte `json:"stdout,omitempty"`
 	Stderr     []byte `json:"stderr,omitempty"`
 	Error      string `json:"error,omitempty"`
+
+	// create result — a token and a path, never a value.
+	Created *CreatedInfo `json:"created,omitempty"`
+
+	// list result — metadata only, never a value.
+	Objects []cpclient.Object `json:"objects,omitempty"`
+}
+
+// CreatedInfo is the result of a create operation. Like Response, it has no
+// field capable of carrying plaintext.
+type CreatedInfo struct {
+	ObjectID string   `json:"object_id"`
+	Folder   string   `json:"folder"`
+	Token    string   `json:"token"`
+	JTI      string   `json:"jti,omitempty"`
+	Expires  int64    `json:"expires,omitempty"`
+	Scope    []string `json:"scope,omitempty"`
 }
 
 // Config holds the sidecar's dependencies.
@@ -55,6 +104,20 @@ type Config struct {
 	Auditor    resolve.Auditor
 	HostName   string
 	Injector   *inject.ExecInjector
+	// Creator handles op=create. When nil, create requests are refused.
+	Creator *created.Creator
+	// Registry handles op=list/op=revoke. Keeping these on the SIDECAR rather
+	// than in the calling process means an agent-adjacent MCP server needs no
+	// control-plane credential at all.
+	Registry Registry
+}
+
+// Registry is the subset of control-plane operations the sidecar proxies for
+// agent-adjacent callers: metadata listing and revocation. Neither involves a
+// value.
+type Registry interface {
+	ListObjects(ctx context.Context, principal string) ([]cpclient.Object, error)
+	RevokeToken(ctx context.Context, jti string) error
 }
 
 // Server accepts resolve requests over a Unix socket.
@@ -207,6 +270,18 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		return
 	}
 
+	switch req.Op {
+	case OpCreate:
+		s.handleCreate(ctx, conn, req)
+		return
+	case OpList:
+		s.handleList(ctx, conn)
+		return
+	case OpRevoke:
+		s.handleRevoke(ctx, conn, req)
+		return
+	}
+
 	res, err := s.resolver.Resolve(ctx, resolve.Request{
 		TokenURI:  req.Token,
 		Scope:     req.Scope,
@@ -229,6 +304,77 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	})
 }
 
+// handleCreate performs a create operation. The plaintext is read from the
+// caller-named source file inside the sidecar; it never travels as a literal
+// through this protocol.
+func (s *Server) handleCreate(ctx context.Context, conn net.Conn, req Request) {
+	if s.cfg.Creator == nil {
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	ttl := time.Duration(req.TTLSeconds) * time.Second
+	res, err := s.cfg.Creator.Create(ctx, created.Request{
+		ObjectID:    req.ObjectID,
+		SourceFile:  req.SourceFile,
+		ContentType: req.ContentType,
+		Scope:       req.ScopeList,
+		Audience:    req.Audience,
+		TTL:         ttl,
+		Principal:   req.Principal,
+	})
+	if err != nil {
+		if s.logf != nil {
+			// Operator-side detail only; the client still gets a generic denial.
+			reason := protocol.ReasonOf(err)
+			if reason == "" {
+				s.logf("create failed: %v", err)
+			} else {
+				s.logf("create denied: reason=%s", reason)
+			}
+		}
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	// The response carries a token and a path — never the created value.
+	writeResp(conn, Response{OK: true, Created: &CreatedInfo{
+		ObjectID: res.ObjectID, Folder: res.Folder, Token: res.Token,
+		JTI: res.JTI, Expires: res.Expires, Scope: res.Scope,
+	}})
+}
+
+// handleList returns object metadata. Metadata only — there is no value path.
+//
+// List and revoke are routed through the sidecar rather than having the MCP
+// server talk to the control plane directly. That is deliberate: the MCP server
+// runs inside the agent's process space, so giving it a control-plane API key
+// would hand a compromised agent admin authority. The sidecar holds the
+// credential; the agent-adjacent process holds none.
+func (s *Server) handleList(ctx context.Context, conn net.Conn) {
+	if s.cfg.Registry == nil {
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	objs, err := s.cfg.Registry.ListObjects(ctx, "")
+	if err != nil {
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	writeResp(conn, Response{OK: true, Objects: objs})
+}
+
+// handleRevoke revokes a token by jti via the control plane.
+func (s *Server) handleRevoke(ctx context.Context, conn net.Conn, req Request) {
+	if s.cfg.Registry == nil || req.JTI == "" {
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	if err := s.cfg.Registry.RevokeToken(ctx, req.JTI); err != nil {
+		writeResp(conn, Response{OK: false, Error: "denied"})
+		return
+	}
+	writeResp(conn, Response{OK: true, Descriptor: req.JTI})
+}
+
 func writeResp(conn net.Conn, r Response) {
 	_ = json.NewEncoder(conn).Encode(r)
 }
@@ -246,15 +392,40 @@ var _ = func() bool {
 		Stdout     []byte
 		Stderr     []byte
 		Error      string
-	}{r.OK, r.Descriptor, r.ExitCode, r.Stdout, r.Stderr, r.Error}
+		Created    *CreatedInfo
+		Objects    []cpclient.Object
+	}{r.OK, r.Descriptor, r.ExitCode, r.Stdout, r.Stderr, r.Error, r.Created, r.Objects}
 	return true
 }()
 
 // Client is a sidecar socket client used by the CLI and tests.
 type Client struct{ SocketPath string }
 
+// List returns object metadata via the sidecar.
+func (c *Client) List(ctx context.Context) (*Response, error) {
+	return c.send(ctx, Request{Op: OpList})
+}
+
+// Revoke revokes a token by jti via the sidecar.
+func (c *Client) Revoke(ctx context.Context, jti string) (*Response, error) {
+	return c.send(ctx, Request{Op: OpRevoke, JTI: jti})
+}
+
+// Create sends a create request. The plaintext is read by the sidecar from
+// SourceFile — this client has no way to send a value.
+func (c *Client) Create(ctx context.Context, req Request) (*Response, error) {
+	req.Op = OpCreate
+	return c.send(ctx, req)
+}
+
 // Resolve sends a request and returns the descriptor.
 func (c *Client) Resolve(ctx context.Context, req Request) (*Response, error) {
+	req.Op = OpResolve
+	return c.send(ctx, req)
+}
+
+// send writes one request and reads one response.
+func (c *Client) send(ctx context.Context, req Request) (*Response, error) {
 	conn, err := net.DialTimeout("unix", c.SocketPath, 5*time.Second)
 	if err != nil {
 		// No resolver reachable — fail closed. See conformance vector

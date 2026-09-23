@@ -88,10 +88,57 @@ echo -n 'sk-live-abc123' | ./bin/safekeys create --object obj_demo
 The full walkthrough, including the revoke → denied lifecycle, is in
 [`docs/quickstart.md`](docs/quickstart.md).
 
+## MCP server — use Safekeys from any agent runtime
+
+One MCP server covers Claude, Cursor, Codex, Gemini, and anything else that
+speaks MCP. No per-vendor SDK.
+
+```bash
+cd packages/mcp-server && npm install && npm run build
+```
+
+Register it with your runtime (the shape is the same everywhere):
+
+```jsonc
+{
+  "mcpServers": {
+    "safekeys": {
+      "command": "node",
+      "args": ["/path/to/safekeys/packages/mcp-server/dist/index.js"],
+      "env": { "SAFEKEYS_SOCKET": "/run/safekeys/sidecar.sock" }
+    }
+  }
+}
+```
+
+Four tools, all token-only:
+
+| Tool | Takes | Returns |
+|------|-------|---------|
+| `create_secret` | a **file path** containing the secret | a capability token + folder path |
+| `resolve_for_tool` | a token + a command | the command's output and exit status |
+| `list_objects` | — | object metadata |
+| `revoke_token` | a `jti` | confirmation |
+
+**`create_secret` has no value parameter.** The sidecar reads the file itself, so
+a model cannot pass a secret even if a prompt injection tells it to. That is a
+structural guarantee, not a behavioural rule.
+
+**The MCP server holds no control-plane credential and no keys.** It runs inside
+the agent's process space, so `list` and `revoke` are proxied through the sidecar
+— otherwise a compromised agent would inherit admin authority just by hosting the
+server.
+
+```bash
+# Smoke test the full flow against a running control plane + sidecar
+cd packages/mcp-server && node scripts/mcp-smoke.mjs
+```
+
 ## Tests
 
 ```bash
 go test ./...                                    # unit + two-agent demo
+(cd packages/mcp-server && npm test)             # MCP tool contracts
 
 # against real infrastructure
 SAFEKEYS_TEST_DATABASE_URL='postgres://safekeys:safekeys-dev-password@localhost:5432/safekeys?sslmode=disable' \
@@ -108,14 +155,18 @@ apps/
   sidecar/         Go — the only component permitted to resolve a token
   cli/             Go — create, exec, revoke, list, audit
   safekeys/        Next.js — safekeys.ai (not yet built)
+packages/
+  mcp-server/      TypeScript — one MCP server for every agent runtime
 pkg/
   protocol/        Go — frozen v1 token + folder formats, AEAD, zeroisation
   resolve/         Go — the resolution path (verify → unwrap → inject → wipe)
   inject/          Go — env, file, exec injection adapters
+  created/         Go — the secret-creation path (plaintext never leaves it)
   keystore/        Go — Vault/OpenBao Transit + a development-only local store
   revocation/      Go — denylist checks against the control plane
   sidecar/         Go — the Unix socket server and client
   folder/          Go — ciphertext folder source
+  cpclient/        Go — control-plane HTTP client (used by the sidecar only)
 spec/              Frozen JSON Schemas + language-neutral conformance vectors
 test/e2e/          The two-agent demo
 ```

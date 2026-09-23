@@ -1,4 +1,5 @@
-// Package client is the control-plane HTTP client used by the CLI.
+// Package cpclient is the control-plane HTTP client, shared by the CLI and the
+// sidecar.
 package client
 
 import (

@@ -34,6 +34,11 @@ yarn-error.log*
 .vscode/*
 !.vscode/extensions.json
 
+# Node
+packages/*/node_modules/
+packages/*/dist/
+*.tsbuildinfo
+
 # Go build output
 bin/
 *.test

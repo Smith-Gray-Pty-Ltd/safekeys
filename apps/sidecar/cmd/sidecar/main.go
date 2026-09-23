@@ -22,6 +22,8 @@ import (
 	"syscall"
 	"time"
 
+	cpclient "github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/cpclient"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/created"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/folder"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
@@ -78,6 +80,8 @@ func run() error {
 		Auditor:  logAuditor{},
 		HostName: hostname(),
 		Injector: inj,
+		Creator:  creatorFor(local, *folderDir),
+		Registry: registryFor(),
 	}
 
 	srv := sidecar.New(cfg)
@@ -119,6 +123,45 @@ func revocationChecker() resolve.RevocationChecker {
 	// A short cache keeps the hot path off the network while bounding how long
 	// a revocation can lag. Never cache the negative for long.
 	return revocation.New(base, key, envDuration("SAFEKEYS_REVOCATION_CACHE_TTL", 2*time.Second))
+}
+
+// registryFor returns the control-plane client the sidecar proxies list/revoke
+// through, so an agent-adjacent caller needs no credential of its own.
+func registryFor() sidecar.Registry {
+	base := os.Getenv("SAFEKEYS_CONTROL_PLANE_URL")
+	if base == "" {
+		return nil
+	}
+	return cpclient.New(base, os.Getenv("SAFEKEYS_API_KEY"))
+}
+
+// creatorFor builds the secret-creation path.
+//
+// It needs the control plane to register objects and mint tokens. Without one,
+// create requests are refused rather than partially performed — a half-created
+// secret (ciphertext on disk, unregistered, no token) would be worse than none.
+func creatorFor(wrapper *keystore.Local, folderRoot string) *created.Creator {
+	base := os.Getenv("SAFEKEYS_CONTROL_PLANE_URL")
+	if base == "" {
+		return nil
+	}
+	return &created.Creator{
+		Wrapper:          keystoreAsWrapper{wrapper},
+		KID:              envOr("SAFEKEYS_KID", "kek-local-1"),
+		Registry:         cpclient.New(base, os.Getenv("SAFEKEYS_API_KEY")),
+		FolderRoot:       folderRoot,
+		DefaultPrincipal: envOr("SAFEKEYS_PRINCIPAL", "operator"),
+		DefaultAudience:  envOr("SAFEKEYS_AUDIENCE", "env-local"),
+	}
+}
+
+// keystoreAsWrapper adapts keystore.Local to created.KeyWrapper. It is the same
+// two-method surface; the wrapper exists only so the packages stay decoupled.
+type keystoreAsWrapper struct{ l *keystore.Local }
+
+func (k keystoreAsWrapper) Wrap(kid string, dek []byte) (string, error) { return k.l.Wrap(kid, dek) }
+func (k keystoreAsWrapper) Unwrap(kid, wrapped string) ([]byte, error) {
+	return k.l.Unwrap(kid, wrapped)
 }
 
 // offlineRevocation denies nothing. Development only.

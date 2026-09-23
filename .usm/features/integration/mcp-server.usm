@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/integration-mcp-server
 $type: feature
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-23"
 summary: |
   The Safekeys MCP server exposes secret tooling to every MCP-capable agent runtime — Claude,
   Cursor, Codex, Gemini — through one standard tool bus. It is the highest-leverage MVP
@@ -10,12 +10,11 @@ summary: |
   paths, and status.
 $system: smith-gray/system
 $service: smith-gray/mcp-server
-status: planned
+status: built
 intent: |
   Every agent framework integration is a thin adapter on the same contract, so building them one by
   one is wasted effort. MCP is the common tool bus across the major 2026 runtimes, which makes a
   single MCP server the cheapest way to cover many products at once and the best adoption wedge.
-
 flows:
   - id: expose-tools
     name: Expose Safekeys tools over MCP
@@ -46,7 +45,6 @@ flows:
       - id: s4
         action: observe
         target: The tool result contains no plaintext, and the call arguments never carried a value.
-
 contracts:
   - id: token-only-tool-results
     description: MCP tool results never contain resolved plaintext.
@@ -69,16 +67,17 @@ contracts:
   - id: out-of-scope-harnesses
     description: Non-MCP harnesses are explicitly out of MVP scope.
     must_have:
-      - CrewAI, AutoGen, Pydantic AI, smolagents, and custom enterprise harnesses are not built in v0
+      - >-
+        CrewAI, AutoGen, Pydantic AI, smolagents, and custom enterprise harnesses are not built in
+        v0
       - They are supported later as examples calling the same SDK or MCP tools
       - No dedicated runtime adapters are created
-
 tests:
   - id: tool-result-has-no-plaintext
     flow: call-tool
     setup:
       tool: resolve_for_tool
-      secret_value: "mcp-test-secret"
+      secret_value: mcp-test-secret
     expect:
       - assertion: the tool result contains no plaintext
       - assertion: the result is a token, path, or status
@@ -102,27 +101,75 @@ tests:
       - assertion: no fallback resolution is attempted
     contracts:
       - delegate-to-sidecar
-
 decisions:
   - id: mcp-is-first
     decision: Make the MCP server the first harness integration shipped.
-    rationale: The blueprint identifies MCP as the highest-leverage integration because it is the common tool bus across Claude, Cursor, Codex, Gemini, and most 2026 agent runtimes — one server covers many products without per-vendor SDKs.
+    rationale: >-
+      The blueprint identifies MCP as the highest-leverage integration because it is the common tool
+      bus across Claude, Cursor, Codex, Gemini, and most 2026 agent runtimes — one server covers
+      many products without per-vendor SDKs.
     status: accepted
   - id: three-harnesses-only
     decision: Limit MVP integrations to the MCP server, the CLI exec wrapper, and the Python SDK.
-    rationale: "The integration surface that matters is agent asks to use a secret, sidecar injects it outside the model — every additional framework is another thin adapter on that same contract. Three covers the two-agent demo and the major runtimes."
+    rationale: >-
+      The integration surface that matters is agent asks to use a secret, sidecar injects it outside
+      the model — every additional framework is another thin adapter on that same contract. Three
+      covers the two-agent demo and the major runtimes.
     status: accepted
   - id: examples-not-runtimes
     decision: Support further harnesses later as examples calling the same SDK or MCP tools.
-    rationale: Maintaining dedicated runtimes per framework creates ongoing cost with no new capability; examples demonstrate integration without becoming maintenance burdens.
+    rationale: >-
+      Maintaining dedicated runtimes per framework creates ongoing cost with no new capability;
+      examples demonstrate integration without becoming maintenance burdens.
     status: accepted
-
+  - id: mcp-holds-no-credential
+    decision: >-
+      The MCP server holds no control-plane API key and no key material; list and revoke are proxied
+      through the sidecar rather than called directly.
+    rationale: >-
+      The MCP server runs inside the agent's process space. Giving it a control-plane credential
+      would mean a compromised agent inherits admin authority — able to mint tokens, read the audit
+      log, and rewrite policy — simply by hosting the server. Routing through the sidecar keeps the
+      credential in the privileged process and the agent-adjacent process empty-handed.
+    alternatives:
+      - option: Let the MCP server hold the API key and call the control plane directly
+        rejected_because: >-
+          Directly contradicts the boundary the rest of the architecture is built on: the component
+          nearest the model would hold the most authority.
+      - option: Give the MCP server a narrow, read-only credential
+        rejected_because: >-
+          Still a credential in the model's process space, and scope creep over time is
+          near-certain. Zero credentials is a property that cannot erode.
+    consequences: >-
+      The sidecar gains op=list and op=revoke. The MCP server cannot function without a local
+      sidecar, which is the intended fail-closed behaviour.
+    status: accepted
+    date: "2026-09-23"
+  - id: create-takes-a-source-file
+    decision: create_secret accepts a source_file path, never a value parameter.
+    rationale: >-
+      A model authoring a tool call can name a host path it knows exists, but it never holds the
+      bytes — the sidecar reads the file itself. Omitting a value parameter entirely means a model
+      cannot pass one even when instructed to by a prompt injection, which is a structural guarantee
+      rather than a behavioural rule.
+    consequences: >-
+      The caller must write the secret to a file out-of-band first. This is a deliberate ergonomic
+      cost in exchange for the value never entering model context.
+    status: accepted
+    date: "2026-09-23"
+  - id: stdio-transport-single-server
+    decision: Use standard MCP over stdio with no vendor-specific code.
+    rationale: >-
+      MCP is the common tool bus across the major runtimes, so one server covers Claude, Cursor,
+      Codex, and Gemini with no per-vendor adapter. A test asserts no source file branches on a
+      vendor, making the property enforced rather than aspirational.
+    status: accepted
+    date: "2026-09-23"
 implementation:
-  primary: packages/mcp-server/src/tools
-  test_code: ""
-  test_code_status: none
-
+  primary: packages/mcp-server/src/index.ts
+  test_code: packages/mcp-server/src/tools/tools.test.ts
+  test_code_status: manual
 see_also:
-  - "smith-gray/exec-wrapper"
-  - "smith-gray/integration-python-sdk"
-  - "smith-gray/sidecar-resolution"
+  - smith-gray/exec-wrapper
+  - smith-gray/integration-python-sdk
+  - smith-gray/sidecar-resolution

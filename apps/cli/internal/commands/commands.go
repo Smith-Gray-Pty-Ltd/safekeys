@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Smith-Gray-Pty-Ltd/safekeys/apps/cli/internal/client"
+	cpclient "github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/cpclient"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
@@ -210,8 +210,8 @@ func cmdCreate(ctx context.Context, env Env, args []string) int {
 	}
 
 	// Register the object's metadata with the control plane.
-	c := client.New(env.ControlPlaneURL, env.APIKey)
-	if err := c.CreateObject(ctx, client.Object{
+	c := cpclient.New(env.ControlPlaneURL, env.APIKey)
+	if err := c.CreateObject(ctx, cpclient.Object{
 		ID: objID, OwnerPrincipal: env.Principal, ContentType: *contentType,
 		WrappingKID: "kek-local-1", FolderID: objID,
 	}); err != nil {
@@ -356,7 +356,7 @@ func cmdRevoke(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: safekeys revoke --jti <jti>")
 		return 2
 	}
-	c := client.New(env.ControlPlaneURL, env.APIKey)
+	c := cpclient.New(env.ControlPlaneURL, env.APIKey)
 	if err := c.RevokeToken(ctx, *jti); err != nil {
 		fmt.Fprintf(os.Stderr, "revoke: %v\n", err)
 		return 1
@@ -374,7 +374,7 @@ func cmdList(ctx context.Context, env Env, args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	c := client.New(env.ControlPlaneURL, env.APIKey)
+	c := cpclient.New(env.ControlPlaneURL, env.APIKey)
 	objs, err := c.ListObjects(ctx, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "list: %v\n", err)
@@ -403,7 +403,7 @@ func cmdAudit(ctx context.Context, env Env, args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	c := client.New(env.ControlPlaneURL, env.APIKey)
+	c := cpclient.New(env.ControlPlaneURL, env.APIKey)
 	events, err := c.Audit(ctx, *sid)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "audit: %v\n", err)
