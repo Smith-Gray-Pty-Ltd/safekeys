@@ -51,7 +51,7 @@ changing the agent-facing API.
 | Phase | Scope | Status |
 |-------|-------|--------|
 | **Phase 0** | Software sidecar, control plane, folder format, CLI | **Implemented** |
-| Phase 0 | Python SDK, MCP server | Planned |
+| **Phase 0** | MCP server, Python SDK | **Implemented** |
 | **Phase 1** | Hardware root of trust (TPM 2.0, enclave, USB token, secure element) | Planned |
 | **Phase 2** | Threshold key splitting + hybrid post-quantum ratchet | Planned |
 | **Phase 3** | Certified tokens, PUF binding, formally verified critical path | Planned |

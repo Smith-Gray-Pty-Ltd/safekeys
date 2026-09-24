@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/integration-python-sdk
 $type: feature
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-23"
 summary: |
   The Python Agent SDK is a token-only client for teams building agents, shipping LangChain and
   LangGraph tools first. `create_secret` and `resolve_for_tool` accept and return only capability
@@ -10,12 +10,11 @@ summary: |
   accidentally route a value through model context.
 $system: smith-gray/system
 $service: smith-gray/python-sdk
-status: planned
+status: built
 intent: |
   Agent developers will do whatever is easiest, so the safest path has to be the easy path. A SDK
   whose types make plaintext impossible to pass or receive removes the opportunity for the most
   common mistake — and it is what Python-first agent teams already expect from a tool integration.
-
 flows:
   - id: create-secret-tool
     name: Create a secret via the SDK tool
@@ -23,7 +22,9 @@ flows:
     steps:
       - id: s1
         action: receive
-        target: Agent calls create_secret with metadata and a non-context value source such as a file path.
+        target: >-
+          Agent calls create_secret with metadata and a non-context value source such as a file
+          path.
       - id: s2
         action: send
         target: SDK hands the value to the local sidecar over the Unix socket.
@@ -49,7 +50,6 @@ flows:
       - id: s4
         action: observe
         target: The value never enters the Python process hosting the agent.
-
 contracts:
   - id: token-only-surface
     description: The SDK's public API accepts and returns tokens and paths, never values.
@@ -75,13 +75,12 @@ contracts:
       - Tool definitions wrap the same SDK functions
       - Tool schemas expose tokens and paths only
       - Tool outputs never include values
-
 tests:
   - id: create-returns-token-not-value
     flow: create-secret-tool
     setup:
-      value_source: "file"
-      secret_value: "sdk-test-secret"
+      value_source: file
+      secret_value: sdk-test-secret
     expect:
       - assertion: the return value is a token and path
       - assertion: the return value does not contain the secret
@@ -90,7 +89,7 @@ tests:
   - id: resolve-returns-status-only
     flow: resolve-for-tool
     setup:
-      token: "safekey://v1/demo"
+      token: safekey://v1/demo
     expect:
       - assertion: the return value is a status or placeholder
       - assertion: no plaintext is returned to the agent process
@@ -109,35 +108,80 @@ tests:
   - id: langgraph-agent-transcript-clean
     flow: create-secret-tool
     setup:
-      agent: "langgraph"
+      agent: langgraph
     expect:
       - assertion: the agent transcript contains no plaintext
       - assertion: the agent holds only a token afterwards
     contracts:
       - no-plaintext-in-context
       - langchain-tool-parity
-
 decisions:
   - id: python-first
     decision: Ship the Python SDK as the first language binding, with LangChain and LangGraph tools.
-    rationale: Python is still the default for people building agents, and those teams expect framework-native tools rather than a raw client. It is also one of the three MVP harness integrations named in the blueprint.
+    rationale: >-
+      Python is still the default for people building agents, and those teams expect
+      framework-native tools rather than a raw client. It is also one of the three MVP harness
+      integrations named in the blueprint.
     status: accepted
   - id: unrepresentable-plaintext
     decision: Design the API so plaintext cannot be passed or received.
-    rationale: A type surface that cannot express a value is a stronger guarantee than documentation asking developers not to pass one.
+    rationale: >-
+      A type surface that cannot express a value is a stronger guarantee than documentation asking
+      developers not to pass one.
     status: accepted
   - id: delegate-all-crypto
     decision: Keep the SDK free of decryption and key handling.
-    rationale: Duplicating crypto in every SDK multiplies the audit surface on the most sensitive path; the sidecar exists precisely so clients do not need it.
+    rationale: >-
+      Duplicating crypto in every SDK multiplies the audit surface on the most sensitive path; the
+      sidecar exists precisely so clients do not need it.
     status: accepted
-
+  - id: zero-dependency-core
+    decision: Keep the core SDK dependency-free; make LangChain/LangGraph an optional extra.
+    rationale: >-
+      A caller who only needs create_secret and resolve_for_tool should pull in nothing. Every
+      dependency in a security-sensitive client is another supply-chain surface and another reason
+      not to adopt it, and the core surface is a Unix socket and json — the standard library is
+      sufficient.
+    alternatives:
+      - option: Require langchain-core
+        rejected_because: >-
+          Forces a large, fast-moving dependency on callers who only want the token-only primitives,
+          and pins the SDK to one framework's release cadence.
+    consequences: >-
+      The tools ship framework-neutral TOOL_SPECS (JSON Schema) so any runtime can register them;
+      build_langchain_tools raises a clear error when the extra is absent rather than degrading
+      silently.
+    status: accepted
+    date: "2026-09-23"
+  - id: value-becomes-a-temp-file
+    decision: >-
+      Even the in-process value parameter is written to a 0600 temp file that the sidecar reads,
+      rather than being sent over the socket.
+    rationale: >-
+      It keeps the wire protocol uniform — the sidecar only ever reads a named source — so there is
+      exactly one code path on the create boundary and it is the one already tested. It also means
+      no value ever sits in a socket buffer.
+    consequences: >-
+      create_secret(value=...) writes and shreds a temp file. Agent-facing code should still use
+      source_file; value exists for trusted in-process callers such as a CLI reading stdin.
+    status: accepted
+    date: "2026-09-23"
+  - id: return-type-is-the-guarantee
+    decision: >-
+      Rely on return types (CreatedSecret, ResolveResult, ObjectMetadata) having no value-bearing
+      field, rather than on documentation.
+    rationale: >-
+      A type with nowhere to put a plaintext is a stronger guarantee than a rule saying not to
+      include one. A test asserts every public method's return annotation is one of the value-free
+      types, so adding a value-bearing return is a deliberate, visible act.
+    status: accepted
+    date: "2026-09-23"
 implementation:
-  primary: packages/sdk-python/safekeys
-  test_code: ""
-  test_code_status: none
-
+  primary: packages/sdk-python/safekeys/client.py
+  test_code: packages/sdk-python/tests/test_sdk.py
+  test_code_status: manual
 see_also:
-  - "smith-gray/secret-creation"
-  - "smith-gray/sidecar-resolution"
-  - "smith-gray/mcp-server"
-  - "smith-gray/exec-wrapper"
+  - smith-gray/secret-creation
+  - smith-gray/sidecar-resolution
+  - smith-gray/mcp-server
+  - smith-gray/exec-wrapper

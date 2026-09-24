@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "safekeys"
+version = "0.1.0"
+description = "Token-only Python SDK for Safekeys — encrypted secret transport for agents, so plaintext never enters model context."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Smith & Gray Pty Ltd" }]
+keywords = ["secrets", "agents", "llm", "langchain", "langgraph", "mcp"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+  "Topic :: Software Development :: Libraries",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# The agent-framework tools. The core SDK has no dependencies at all, so a
+# caller who only wants create_secret/resolve_for_tool pulls in nothing.
+langchain = ["langchain-core>=0.2"]
+dev = ["pytest>=8.0", "langchain-core>=0.2", "mypy>=1.8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://safekeys.ai"
+Repository = "https://github.com/Smith-Gray-Pty-Ltd/safekeys"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["safekeys*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.mypy]
+strict = true
+warn_unused_ignores = true
