@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/threshold-crypto
 $type: feature
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-24"
 summary: |
   Phase 2 hardening splits key knowledge between the secure element and the authority, reconstructs
   ephemerally only inside the element for a requested operation, and adds a hybrid classical plus
@@ -16,7 +16,6 @@ intent: |
   point of trust and long-lived ciphertext remains exposed to future quantum capability. Threshold
   splitting removes the single holder, and a post-quantum ratchet protects sessions against
   harvest-now-decrypt-later.
-
 flows:
   - id: split-key-shares
     name: Split key knowledge across holders
@@ -27,7 +26,9 @@ flows:
         target: Provisioning splits key knowledge into shares with a threshold policy.
       - id: s2
         action: setup
-        target: One share is installed in the secure element; complementary shares are held at the authority.
+        target: >-
+          One share is installed in the secure element; complementary shares are held at the
+          authority.
       - id: s3
         action: observe
         target: No single holder can reconstruct the key alone.
@@ -60,7 +61,6 @@ flows:
       - id: s3
         action: observe
         target: Harvested session traffic is not decryptable by a future quantum adversary.
-
 contracts:
   - id: no-single-holder
     description: No single component may be able to reconstruct the key.
@@ -86,7 +86,6 @@ contracts:
       - Hybrid classical plus PQ key establishment
       - Forward-secret ratcheting of session keys
       - Documented as Phase 2, not MVP
-
 tests:
   - id: single-share-insufficient
     flow: split-key-shares
@@ -101,7 +100,7 @@ tests:
   - id: unattested-device-denied
     flow: ephemeral-reconstruction
     setup:
-      attestation: "fail"
+      attestation: fail
     expect:
       - assertion: unwrap is denied
       - assertion: no reconstruction occurs
@@ -119,33 +118,38 @@ tests:
   - id: session-ratchet-forward-secret
     flow: hybrid-ratchet
     setup:
-      compromise: "session key at time T"
+      compromise: session key at time T
     expect:
       - assertion: traffic before T is not decryptable
       - assertion: the hybrid KEM was used for establishment
     contracts:
       - post-quantum-sessions
-
 decisions:
   - id: defer-to-phase-2
     decision: Keep threshold crypto and post-quantum ratchets out of the MVP and Phase 1.
-    rationale: The MVP already meets the product promise with software isolation, and the blueprint is explicit that the agent-facing surface must not change when these land. Deferring keeps time to beta short without weakening the shipped guarantee.
+    rationale: >-
+      The MVP already meets the product promise with software isolation, and the blueprint is
+      explicit that the agent-facing surface must not change when these land. Deferring keeps time
+      to beta short without weakening the shipped guarantee.
     status: accepted
   - id: hybrid-not-pq-only
     decision: Use a hybrid classical plus ML-KEM-class construction rather than post-quantum only.
-    rationale: Hybrid avoids depending entirely on relatively young PQ primitives while still closing the harvest-now-decrypt-later exposure.
+    rationale: >-
+      Hybrid avoids depending entirely on relatively young PQ primitives while still closing the
+      harvest-now-decrypt-later exposure.
     status: accepted
   - id: threshold-over-single-device
     decision: Split knowledge across element and authority rather than trusting a single device.
-    rationale: A secure element is a strong boundary but still one holder; splitting means compromise of the device and compromise of the authority are both required, which is the difference between a breach and a non-event.
+    rationale: >-
+      A secure element is a strong boundary but still one holder; splitting means compromise of the
+      device and compromise of the authority are both required, which is the difference between a
+      breach and a non-event.
     status: accepted
-
 implementation:
-  primary: apps/sidecar/internal/verify
+  primary: pkg/protocol/envelope.go
   test_code: ""
   test_code_status: none
-
 see_also:
-  - "smith-gray/hardware-root"
-  - "smith-gray/envelope-encryption"
-  - "smith-gray/sidecar-resolution"
+  - smith-gray/hardware-root
+  - smith-gray/envelope-encryption
+  - smith-gray/sidecar-resolution
