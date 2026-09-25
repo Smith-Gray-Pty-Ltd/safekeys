@@ -41,10 +41,14 @@ func main() {
 
 func run() error {
 	var (
-		socket    = flag.String("socket", envOr("SAFEKEYS_SOCKET", "/run/safekeys/sidecar.sock"), "unix socket path")
-		folderDir = flag.String("folder", envOr("SAFEKEYS_FOLDER", defaultFolderRoot()), "folder root holding ciphertext objects")
-		audience  = flag.String("audience", envOr("SAFEKEYS_AUDIENCE", "env-local"), "resolver identity; tokens must match")
-		keyPath   = flag.String("keystore", envOr("SAFEKEYS_KEYSTORE", defaultKeystorePath()), "local KEK path (development)")
+		socket     = flag.String("socket", envOr("SAFEKEYS_SOCKET", "/run/safekeys/sidecar.sock"), "unix socket path")
+		folderDir  = flag.String("folder", envOr("SAFEKEYS_FOLDER", defaultFolderRoot()), "folder root holding ciphertext objects")
+		audience   = flag.String("audience", envOr("SAFEKEYS_AUDIENCE", "env-local"), "resolver identity; tokens must match")
+		keyPath    = flag.String("keystore", envOr("SAFEKEYS_KEYSTORE", defaultKeystorePath()), "local KEK path (development mode only)")
+		vaultAddr  = flag.String("vault-addr", os.Getenv("SAFEKEYS_VAULT_ADDR"), "OpenBao/Vault address; when set, the KEK lives in the vault and never leaves it")
+		vaultTok   = flag.String("vault-token", os.Getenv("SAFEKEYS_VAULT_TOKEN"), "OpenBao/Vault token")
+		vaultMount = flag.String("vault-mount", envOr("SAFEKEYS_VAULT_MOUNT", "transit"), "OpenBao/Vault transit mount path")
+		vaultKID   = flag.String("vault-kid", envOr("SAFEKEYS_VAULT_KID", "kek-1"), "transit key name (the KEK)")
 	)
 	flag.Parse()
 
@@ -56,11 +60,17 @@ func run() error {
 	}
 
 	// ── Key store. The KEK never leaves it (ADR kek-never-leaves-store).
-	local, err := keystore.NewLocal(*keyPath)
+	//
+	// Two backends:
+	//   Vault  — the KEK lives inside OpenBao/Vault Transit and is never
+	//            exported. This is the production path.
+	//   Local  — a KEK in a 0600 file. Development only; refuses to load without
+	//            an explicit opt-in.
+	wrapper, kid, cleanup, err := openKeystore(*vaultAddr, *vaultTok, *vaultMount, *vaultKID, *keyPath)
 	if err != nil {
 		return err
 	}
-	defer local.Close()
+	defer cleanup()
 
 	// Capture so a remote caller receives the command's own output over the
 	// socket. The injector still never returns the injected value.
@@ -74,13 +84,13 @@ func run() error {
 		Revoked:    revocationChecker(),
 		Policy:     localPolicy{},
 		Source:     folder.New(*folderDir),
-		Unwrap: func(ctx context.Context, kid, wrapped string) ([]byte, error) {
-			return local.Unwrap(kid, wrapped)
+		Unwrap: func(ctx context.Context, keyID, wrapped string) ([]byte, error) {
+			return wrapper.Unwrap(keyID, wrapped)
 		},
 		Auditor:  logAuditor{},
 		HostName: hostname(),
 		Injector: inj,
-		Creator:  creatorFor(local, *folderDir),
+		Creator:  creatorFor(wrapper, kid, *folderDir),
 		Registry: registryFor(),
 	}
 
@@ -120,9 +130,13 @@ func revocationChecker() resolve.RevocationChecker {
 	}
 	base := envOr("SAFEKEYS_CONTROL_PLANE_URL", "http://localhost:8080")
 	key := os.Getenv("SAFEKEYS_API_KEY")
-	// A short cache keeps the hot path off the network while bounding how long
-	// a revocation can lag. Never cache the negative for long.
-	return revocation.New(base, key, envDuration("SAFEKEYS_REVOCATION_CACHE_TTL", 2*time.Second))
+	c := revocation.New(base, key)
+	// Negative caching is OFF by default: caching a not-revoked result is what
+	// would let a token revoked inside the window still resolve, which the
+	// `immediate-effect` contract forbids. Operators who need the throughput can
+	// opt in and accept the lag.
+	c.NegativeTTL = envDuration("SAFEKEYS_REVOCATION_NEGATIVE_TTL", 0)
+	return c
 }
 
 // registryFor returns the control-plane client the sidecar proxies list/revoke
@@ -140,14 +154,14 @@ func registryFor() sidecar.Registry {
 // It needs the control plane to register objects and mint tokens. Without one,
 // create requests are refused rather than partially performed — a half-created
 // secret (ciphertext on disk, unregistered, no token) would be worse than none.
-func creatorFor(wrapper *keystore.Local, folderRoot string) *created.Creator {
+func creatorFor(wrapper protocol.KeyWrapper, kid, folderRoot string) *created.Creator {
 	base := os.Getenv("SAFEKEYS_CONTROL_PLANE_URL")
 	if base == "" {
 		return nil
 	}
 	return &created.Creator{
-		Wrapper:          keystoreAsWrapper{wrapper},
-		KID:              envOr("SAFEKEYS_KID", "kek-local-1"),
+		Wrapper:          wrapper,
+		KID:              kid,
 		Registry:         cpclient.New(base, os.Getenv("SAFEKEYS_API_KEY")),
 		FolderRoot:       folderRoot,
 		DefaultPrincipal: envOr("SAFEKEYS_PRINCIPAL", "operator"),
@@ -155,13 +169,27 @@ func creatorFor(wrapper *keystore.Local, folderRoot string) *created.Creator {
 	}
 }
 
-// keystoreAsWrapper adapts keystore.Local to created.KeyWrapper. It is the same
-// two-method surface; the wrapper exists only so the packages stay decoupled.
-type keystoreAsWrapper struct{ l *keystore.Local }
-
-func (k keystoreAsWrapper) Wrap(kid string, dek []byte) (string, error) { return k.l.Wrap(kid, dek) }
-func (k keystoreAsWrapper) Unwrap(kid, wrapped string) ([]byte, error) {
-	return k.l.Unwrap(kid, wrapped)
+// openKeystore selects the key store backend.
+//
+// With SAFEKEYS_VAULT_ADDR set, the KEK lives in OpenBao/Vault Transit and never
+// leaves it — the sidecar only ever sees wrapped, or transiently unwrapped, DEKs.
+// Otherwise it falls back to the local file store, which is development-only and
+// requires an explicit opt-in.
+func openKeystore(vaultAddr, vaultToken, mount, vaultKID, localPath string) (protocol.KeyWrapper, string, func(), error) {
+	if vaultAddr != "" {
+		v := keystore.NewVault(vaultAddr, vaultToken, mount)
+		if err := v.Healthy(); err != nil {
+			return nil, "", nil, fmt.Errorf("vault at %s is not reachable or is sealed: %w", vaultAddr, err)
+		}
+		log.Printf("sidecar: keystore = vault transit (%s, key %q); the KEK never leaves the vault", vaultAddr, vaultKID)
+		return v, vaultKID, func() {}, nil
+	}
+	local, err := keystore.NewLocal(localPath)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	log.Printf("sidecar: keystore = LOCAL FILE %s (development only — set SAFEKEYS_VAULT_ADDR for production)", localPath)
+	return local, envOr("SAFEKEYS_KID", "kek-local-1"), local.Close, nil
 }
 
 // offlineRevocation denies nothing. Development only.

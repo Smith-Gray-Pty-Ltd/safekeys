@@ -1,15 +1,21 @@
 // Package revocation provides the sidecar's revocation checker.
 //
-// The MVP limitation documented in apps/sidecar/cmd/sidecar/main.go — "the
-// sidecar denies nothing on revocation grounds" — is closed here: the sidecar
-// asks the control plane's denylist on every resolve, so revocation takes
-// effect immediately rather than waiting for TTL expiry.
+// It asks the control plane's denylist on every resolve, so revocation takes
+// effect immediately rather than waiting for TTL expiry, and FAILS CLOSED: if
+// the control plane is unreachable the token is treated as revoked, because a
+// resolve that cannot verify current authority must not proceed.
 //
-// The check FAILS CLOSED. If the control plane is unreachable, the token is
-// treated as revoked, because a resolve that cannot verify current authority
-// must not proceed. This is a deliberate trade: availability of the control
-// plane gates resolution. Operators who need to tolerate control-plane outages
-// should shorten TTLs and accept that revocation lags, rather than fail open.
+// Caching policy is dictated by the `immediate-effect` contract in
+// .usm/features/lifecycle/token-revocation.usm: "the denylist is consulted on
+// every resolve" and "no caching path can serve a revoked token".
+//
+//   - A POSITIVE result (revoked) is cached indefinitely. Revocation is
+//     monotonic — once revoked, always revoked — so caching it can never serve
+//     a live token, and it keeps the (rare) revoked case off the network.
+//   - A NEGATIVE result (not revoked) is NOT cached by default. Caching it is
+//     exactly what would let a token revoked inside the cache window still
+//     resolve, which the contract forbids. Setting NegativeTTL explicitly opts
+//     into that lag as a throughput trade-off, and weakens the guarantee.
 package revocation
 
 import (
@@ -28,10 +34,12 @@ type ControlPlaneChecker struct {
 	APIKey  string
 	HTTP    *http.Client
 
-	// CacheTTL bounds how long a negative (not-revoked) result is cached, to
-	// keep the hot path off the network. A POSITIVE (revoked) result is never
-	// cached as negative, and revocation is never cached away.
-	CacheTTL time.Duration
+	// NegativeTTL, when greater than zero, caches a not-revoked result for this
+	// long. This trades revocation immediacy for fewer network calls and
+	// therefore WEAKENS the `immediate-effect` contract: a token revoked within
+	// the window will still resolve. Zero (the default) means every resolve
+	// consults the control plane.
+	NegativeTTL time.Duration
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry
@@ -39,18 +47,17 @@ type ControlPlaneChecker struct {
 
 type cacheEntry struct {
 	revoked bool
-	expires time.Time
+	expires time.Time // zero means "never expires"
 }
 
-// New builds a checker. cacheTTL of 0 disables caching entirely, which is the
-// safest setting and the default.
-func New(baseURL, apiKey string, cacheTTL time.Duration) *ControlPlaneChecker {
+// New builds a checker with no negative caching, which is the contract-correct
+// default.
+func New(baseURL, apiKey string) *ControlPlaneChecker {
 	return &ControlPlaneChecker{
-		BaseURL:  baseURL,
-		APIKey:   apiKey,
-		HTTP:     &http.Client{Timeout: 5 * time.Second},
-		CacheTTL: cacheTTL,
-		cache:    map[string]cacheEntry{},
+		BaseURL: baseURL,
+		APIKey:  apiKey,
+		HTTP:    &http.Client{Timeout: 5 * time.Second},
+		cache:   map[string]cacheEntry{},
 	}
 }
 
@@ -61,14 +68,17 @@ func (c *ControlPlaneChecker) IsRevoked(ctx context.Context, jti string) (bool, 
 	if jti == "" {
 		return true, nil
 	}
-	if c.CacheTTL > 0 {
-		c.mu.Lock()
-		if e, ok := c.cache[jti]; ok && time.Now().Before(e.expires) {
+
+	// A cached revocation never expires: revoked is monotonic.
+	c.mu.Lock()
+	if e, ok := c.cache[jti]; ok {
+		if e.expires.IsZero() || time.Now().Before(e.expires) {
 			c.mu.Unlock()
 			return e.revoked, nil
 		}
-		c.mu.Unlock()
+		delete(c.cache, jti)
 	}
+	c.mu.Unlock()
 
 	revoked, err := c.fetch(ctx, jti)
 	if err != nil {
@@ -76,11 +86,15 @@ func (c *ControlPlaneChecker) IsRevoked(ctx context.Context, jti string) (bool, 
 		return true, err
 	}
 
-	if c.CacheTTL > 0 {
-		c.mu.Lock()
-		c.cache[jti] = cacheEntry{revoked: revoked, expires: time.Now().Add(c.CacheTTL)}
-		c.mu.Unlock()
+	c.mu.Lock()
+	if revoked {
+		// Cache the positive forever — it can only ever be true again.
+		c.cache[jti] = cacheEntry{revoked: true}
+	} else if c.NegativeTTL > 0 {
+		c.cache[jti] = cacheEntry{revoked: false, expires: time.Now().Add(c.NegativeTTL)}
 	}
+	c.mu.Unlock()
+
 	return revoked, nil
 }
 

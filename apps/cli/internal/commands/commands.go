@@ -21,7 +21,6 @@ import (
 
 	cpclient "github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/cpclient"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
-	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/sidecar"
 )
@@ -159,6 +158,16 @@ func cmdCreate(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(os.Stderr, "warning: reading from a terminal echoes the value; prefer --file or a pipe")
 	}
 
+	// Delegate creation to the sidecar.
+	//
+	// The CLI deliberately does NOT encrypt locally. The sidecar owns the
+	// keystore and is the only component permitted to touch key material, so
+	// doing the crypto here would (a) duplicate it in every client, and (b)
+	// bypass the production keystore — a local file store would be used even
+	// when the sidecar is configured for OpenBao/Vault.
+	//
+	// The sidecar also reads the source itself, so the value never travels over
+	// the socket.
 	objID := *object
 	if objID == "" {
 		objID, err = protocol.NewID("obj")
@@ -168,69 +177,61 @@ func cmdCreate(ctx context.Context, env Env, args []string) int {
 		}
 	}
 
-	// Encrypt locally. The DEK wraps under the KEK, which stays in the store.
-	store, err := keystore.NewLocal(env.KeystorePath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keystore: %v\n", err)
-		return 1
-	}
-	defer store.Close()
-
-	dek, err := protocol.NewDEK()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "dek: %v\n", err)
-		return 1
-	}
-	defer protocol.Zero(dek)
-
-	ciphertext, err := protocol.EncryptObject(protocol.AlgAES256GCM, dek, secure.Bytes())
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "encrypt: %v\n", err)
-		return 1
-	}
-	wrapped, err := store.Wrap("kek-local-1", dek)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "wrap: %v\n", err)
-		return 1
-	}
-
-	// Write the folder: ciphertext + manifest + README.
-	folderDir := filepath.Join(env.FolderDir, objID)
-	m := &protocol.Manifest{
-		Safekeys: protocol.Version,
-		Objects: []protocol.ManifestObject{{
-			ID: objID, Path: "objects/" + objID + ".enc",
-			Alg: protocol.AlgAES256GCM, WrappedKey: wrapped, WrappingKID: "kek-local-1",
-			ContentType: *contentType,
-		}},
-	}
-	if err := protocol.WriteFolder(folderDir, m, map[string][]byte{objID: ciphertext}, "Safekeys folder for "+objID); err != nil {
-		fmt.Fprintf(os.Stderr, "write folder: %v\n", err)
-		return 1
+	// The sidecar reads from a file. When the caller piped a value, write it to a
+	// private temp file first; never send it as a literal.
+	srcPath := *file
+	var tmpSrc string
+	if srcPath == "" {
+		f, terr := os.CreateTemp("", "safekeys-src-*")
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "temp file: %v\n", terr)
+			return 1
+		}
+		if err := os.Chmod(f.Name(), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "chmod: %v\n", err)
+			f.Close()
+			os.Remove(f.Name())
+			return 1
+		}
+		if _, werr := f.Write(secure.Bytes()); werr != nil {
+			fmt.Fprintf(os.Stderr, "write temp: %v\n", werr)
+			f.Close()
+			os.Remove(f.Name())
+			return 1
+		}
+		f.Close()
+		tmpSrc, srcPath = f.Name(), f.Name()
+		defer shred(tmpSrc)
 	}
 
-	// Register the object's metadata with the control plane.
-	c := cpclient.New(env.ControlPlaneURL, env.APIKey)
-	if err := c.CreateObject(ctx, cpclient.Object{
-		ID: objID, OwnerPrincipal: env.Principal, ContentType: *contentType,
-		WrappingKID: "kek-local-1", FolderID: objID,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "register object: %v\n", err)
-		fmt.Fprintf(os.Stderr, "note: ciphertext written to %s but not registered\n", folderDir)
+	cl := &sidecar.Client{SocketPath: env.SocketPath}
+	resp, cerr := cl.Create(ctx, sidecar.Request{
+		ObjectID:    objID,
+		SourceFile:  srcPath,
+		ContentType: *contentType,
+		ScopeList:   []string{protocol.ScopeInjectEnv, protocol.ScopeRead},
+		Audience:    env.Audience,
+		TTLSeconds:  int(ttl.Seconds()),
+		Principal:   env.Principal,
+	})
+	if cerr != nil {
+		fmt.Fprintf(os.Stderr, "no sidecar at %s: %v\n", env.SocketPath, cerr)
+		fmt.Fprintln(os.Stderr, "start it with: make dev")
 		return 1
 	}
-
-	info, err := c.IssueToken(ctx, objID, []string{protocol.ScopeInjectEnv, protocol.ScopeRead}, env.Audience, *ttl, env.Principal)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "issue token: %v\n", err)
+	if !resp.OK || resp.Created == nil {
+		fmt.Fprintln(os.Stderr, "denied")
 		return 1
 	}
 
 	// The caller receives a token and a path — never the value.
-	fmt.Printf("object:  %s\n", objID)
-	fmt.Printf("folder:  %s\n", folderDir)
-	fmt.Printf("expires: %s\n", time.Unix(info.Exp, 0).Format(time.RFC3339))
-	fmt.Printf("token:   %s\n", info.Token)
+	c := resp.Created
+	fmt.Printf("object:  %s\n", c.ObjectID)
+	fmt.Printf("folder:  %s\n", c.Folder)
+	if c.Expires > 0 {
+		fmt.Printf("expires: %s\n", time.Unix(c.Expires, 0).Format(time.RFC3339))
+	}
+	fmt.Printf("token:   %s\n", c.Token)
 	return 0
 }
 
@@ -414,6 +415,22 @@ func cmdAudit(ctx context.Context, env Env, args []string) int {
 		fmt.Printf("%-22s %-12s %-8s %-10s %s\n", e.At, e.Event, e.Outcome, e.Reason, e.SID)
 	}
 	return 0
+}
+
+// shred overwrites a temp file with zeros before removing it. Best-effort: the
+// OS may have page-cached it, but it shortens the window a source value exists
+// on disk.
+func shred(path string) {
+	if path == "" {
+		return
+	}
+	if fi, err := os.Stat(path); err == nil {
+		if f, err := os.OpenFile(path, os.O_WRONLY, 0o600); err == nil {
+			_, _ = f.Write(make([]byte, fi.Size()))
+			f.Close()
+		}
+	}
+	os.Remove(path)
 }
 
 func isTerminal() bool {

@@ -88,6 +88,53 @@ echo -n 'sk-live-abc123' | ./bin/safekeys create --object obj_demo
 The full walkthrough, including the revoke → denied lifecycle, is in
 [`docs/quickstart.md`](docs/quickstart.md).
 
+## Testing it in opencode
+
+Safekeys ships an MCP server, so opencode (or Claude, Cursor, Codex, Gemini) can
+create and use secrets without ever seeing a value.
+
+```bash
+make build          # Go binaries
+make dev            # Postgres + OpenBao + control plane + sidecar (background)
+```
+
+Then the project already has it wired in `opencode.json`:
+
+```jsonc
+{
+  "mcp": {
+    "safekeys": {
+      "type": "local",
+      "command": ["node", "packages/mcp-server/dist/index.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Verify opencode sees it:
+
+```bash
+opencode mcp list        # → ✓ safekeys connected
+```
+
+Then in an opencode session:
+
+> Write a secret to /tmp/api-key.txt, then use `safekeys` create_secret on it,
+> and use resolve_for_tool to run `gh api /user` with it.
+
+The model gets a token and a path. It never gets the value — there is no
+parameter on `create_secret` that could carry one.
+
+**No environment configuration is needed.** The Go, TypeScript and Python
+clients all default to the same socket path (`$TMPDIR/safekeys/sidecar.sock`),
+which is where `make dev` puts it.
+
+```bash
+make demo           # end-to-end: create → use → revoke, asserting no leak
+make mcp-smoke      # drive the MCP server against the live stack
+```
+
 ## MCP server — use Safekeys from any agent runtime
 
 One MCP server covers Claude, Cursor, Codex, Gemini, and anything else that

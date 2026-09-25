@@ -49,6 +49,9 @@ venv/
 .ruff_cache/
 *.tsbuildinfo
 
+# Local development state (dev signing key, KEK, ciphertext folders)
+.dev/
+
 # Go build output
 bin/
 *.test
