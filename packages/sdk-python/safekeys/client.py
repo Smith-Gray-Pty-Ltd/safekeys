@@ -283,10 +283,10 @@ class Safekeys:
             if cleanup is not None:
                 _shred(cleanup)
 
-        resp = json.loads(raw)
-        if not resp.get("ok"):
-            raise SafekeysDenied(resp.get("error") or "denied")
-        return resp
+        parsed: dict[str, Any] = json.loads(raw)
+        if not parsed.get("ok"):
+            raise SafekeysDenied(parsed.get("error") or "denied")
+        return parsed
 
     def _roundtrip(self, req: dict[str, Any]) -> str:
         try:

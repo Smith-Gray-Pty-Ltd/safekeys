@@ -178,7 +178,7 @@ def build_langchain_tools(sk: Safekeys) -> list[Any]:
     direct caller behave identically.
     """
     try:
-        from langchain_core.tools import StructuredTool  # type: ignore[import-not-found]
+        from langchain_core.tools import StructuredTool
     except ImportError as exc:  # pragma: no cover - depends on the environment
         raise ImportError(
             "langchain-core is required for build_langchain_tools(); "

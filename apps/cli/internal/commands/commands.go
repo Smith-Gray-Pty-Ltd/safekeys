@@ -286,7 +286,7 @@ func cmdExec(ctx context.Context, env Env, args []string) int {
 // without a running sidecar, and it does not weaken the model guarantee: the
 // value still goes only into the child's environment.
 func execLocal(ctx context.Context, env Env, tokenURI, scope, name, folderDir string, command []string) int {
-	signer, store, err := loadLocalSigner(env)
+	verifier, store, err := loadLocalVerifier(env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "signer: %v\n", err)
 		return 1
@@ -299,7 +299,7 @@ func execLocal(ctx context.Context, env Env, tokenURI, scope, name, folderDir st
 		fmt.Fprintln(os.Stderr, "denied")
 		return 1
 	}
-	claims, err := protocol.VerifyToken(signer, parsed, env.Audience, time.Now(), func(string) bool { return false })
+	claims, err := protocol.VerifyToken(verifier, parsed, env.Audience, time.Now(), func(string) bool { return false })
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "denied")
 		return 1

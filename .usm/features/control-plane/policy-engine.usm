@@ -2,14 +2,14 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/policy-engine
 $type: feature
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-25"
 summary: |
   The policy engine decides which sidecar, principal, and process may resolve which object, for
   which scope, into which environment. It runs at token issuance and again as a local check in the
   sidecar, so a token that exists is still not sufficient if local policy forbids the request.
 $system: smith-gray/system
 $service: smith-gray/control-plane
-status: in-progress
+status: built
 intent: |
   A valid token proves authority was once granted; it does not prove the request in front of you is
   allowed now, from this host, under this injection method. Policy is the layer that expresses
@@ -148,9 +148,40 @@ decisions:
       a follow-up; until it lands, resolve-time policy is an allow for any token the issuer minted.
     status: accepted
     date: "2026-09-22"
+  - id: resolve-time-rules-now-loaded
+    decision: >-
+      The sidecar now loads real resolve-time rules from the control plane (cached, default-deny)
+      instead of the previous hardcoded allow.
+    rationale: >-
+      This closes the gap this feature was marked in-progress for. The control-plane engine was
+      always built and tested, but the sidecar's checker returned true unconditionally, so a token
+      that existed was sufficient regardless of what local policy said — the 'a valid token is still
+      not sufficient' half of the contract was unenforced. Rules are now fetched from the same
+      source evaluated at issuance, so both points agree and an operator's change takes effect
+      without a restart.
+    consequences: >-
+      SAFEKEYS_POLICY_FILE provides a static ruleset for air-gapped or bootstrap use; a malformed
+      file is fatal rather than being treated as an empty (deny-all) set by accident. A control
+      plane that cannot be reached at startup is fatal, so a misconfiguration surfaces as a boot
+      failure rather than a silent deny-everything.
+    status: accepted
+    date: "2026-09-26"
+  - id: policy-fail-closed-warm-cache
+    decision: >-
+      Policy evaluation denies when rules cannot be loaded and no cache exists; a warm cache serves
+      last-known-good.
+    rationale: >-
+      A checker that cannot see policy must not assume it is satisfied. But the same reasoning as
+      the key cache applies: a brief control-plane blip should not take resolution dark, and a stale
+      rule set is safer than a resolver that stops working.
+    consequences: >-
+      Tested directly: removal of a rule takes effect, and an outage with a warm cache does not deny
+      live requests.
+    status: accepted
+    date: "2026-09-26"
 implementation:
-  primary: apps/control-plane/internal/policy/policy.go
-  test_code: apps/control-plane/internal/policy/policy_test.go
+  primary: pkg/localpolicy/localpolicy.go
+  test_code: pkg/localpolicy/localpolicy_test.go
   test_code_status: manual
 see_also:
   - smith-gray/control-plane-api

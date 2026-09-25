@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/sidecar-resolution
 $type: feature
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-25"
 summary: |
   Token resolution is the act that turns a capability token into a plaintext value for exactly one
   non-LLM consumer. It happens only in the privileged sidecar: verify the token, unwrap the DEK,
@@ -148,6 +148,50 @@ decisions:
       The architectural promise is that a compromised agent sandbox does not yield the key; shared
       memory would reintroduce exactly the surface being eliminated.
     status: accepted
+  - id: sidecar-holds-public-keys-only
+    decision: >-
+      Split protocol.Signer (mint) from protocol.Verifier (public keys only). The sidecar and CLI
+      hold a Verifier and never a Signer.
+    rationale: >-
+      The sidecar runs on the same host as the secrets, which makes it the component most likely to
+      be attacked. If it held a signing key, compromising it would let an attacker mint tokens and
+      defeat the whole model — the sidecar would become the weakest link in the chain it exists to
+      protect. Splitting the interfaces makes that structurally impossible rather than a rule: a
+      Verifier has no Sign method in scope, so the failure cannot be written by accident. The
+      control plane publishes its public keys at /v1/keys and the sidecar fetches and caches them,
+      refreshing on an unknown kid so a key rotation propagates without a restart.
+    alternatives:
+      - option: Share one signing key between the control plane and the sidecar
+        rejected_because: >-
+          This was the original arrangement — a SAFEKEYS_DEV_SIGNING_KEY read by both. It gave the
+          sidecar minting authority, so a host compromise escalated from reading one secret to
+          minting tokens for any object.
+      - option: Give the sidecar a separate signing key
+        rejected_because: >-
+          Two authorities to revoke and two keys to rotate, for no benefit: the sidecar has no
+          reason to mint anything.
+    consequences: >-
+      Verification keys must be distributable, so /v1/keys is now a real endpoint publishing PUBLIC
+      keys only and unauthenticated by design — publishing a public key is not a disclosure, and
+      requiring a credential to check a signature would reintroduce the problem. A test asserts
+      keysource.Verifier does not satisfy protocol.Signer.
+    status: accepted
+    date: "2026-09-26"
+  - id: verifier-fails-closed-cold
+    decision: >-
+      A verifier with a cold key cache and an unreachable control plane denies every token; a warm
+      cache serves last-known-good.
+    rationale: >-
+      A verifier that cannot check a signature must not accept one — that is the definition of
+      failing open. But taking resolution dark on a brief control-plane blip would be its own
+      outage. The distinction is between never having verified (cold: deny) and having verified
+      recently (warm: serve, since key staleness is handled by revocation, not by refusing to work).
+      The same shape applies to the policy cache.
+    consequences: >-
+      Startup fails if the control plane is unreachable and no static keys are configured, so a
+      misconfiguration is obvious at boot rather than as a silent deny-everything.
+    status: accepted
+    date: "2026-09-26"
 implementation:
   primary: pkg/resolve/resolve.go
   test_code: test/e2e/two_agent_demo_test.go

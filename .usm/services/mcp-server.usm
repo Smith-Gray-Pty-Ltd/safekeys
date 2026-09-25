@@ -2,13 +2,14 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/mcp-server
 $type: service
 $version: 1
-$last_updated: "2026-09-22"
-summary: |
-  Safekeys MCP Server — the highest-leverage MVP integration. One MCP server exposes Safekeys tools to every MCP-capable agent runtime (Claude, Cursor, Codex, Gemini), so agents can create and use secrets without per-vendor SDK work. Agents receive only tokens, paths, and status.
-
+$last_updated: "2026-09-26"
+summary: >
+  Safekeys MCP Server — the highest-leverage MVP integration. One MCP server exposes Safekeys tools
+  to every MCP-capable agent runtime (Claude, Cursor, Codex, Gemini), so agents can create and use
+  secrets without per-vendor SDK work. Agents receive only tokens, paths, and status.
 $system: smith-gray/system
 name: Safekeys MCP Server
-status: planned
+status: built
 type: api
 runtime: node
 port: 0
@@ -16,56 +17,59 @@ paths:
   - packages/mcp-server
 depends_on:
   - cli
-
 tech_stack:
   language: TypeScript / Node
   protocol: Model Context Protocol (stdio transport)
   transport: local sidecar Unix socket for resolution
-
 dev:
-  command: "node packages/mcp-server/dist/index.js"
+  command: node packages/mcp-server/dist/index.js
   url: ""
   env:
     SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
-
 prod:
   url: ""
   region: ""
   deployment_ref: ""
-
 testing:
   framework: vitest
-  command: "npm test --workspace packages/mcp-server"
-  coverage_target: "80%"
-
+  command: npm test --workspace packages/mcp-server
+  coverage_target: 80%
 security:
   auth_method: Local sidecar socket; the MCP client is trusted as an agent host
   secrets_ref: docs/help/security-model.md
-
 modules:
   - name: server
     purpose: MCP server bootstrap and tool registration
-    paths: [packages/mcp-server/src/index.ts]
+    paths:
+      - packages/mcp-server/src/index.ts
   - name: tools
     purpose: Tool handlers — create_secret, resolve_for_tool, list, revoke — all token-only
-    paths: [packages/mcp-server/src/tools]
+    paths:
+      - packages/mcp-server/src/tools
   - name: sidecar-client
     purpose: Unix socket client to the local sidecar
-    paths: [packages/mcp-server/src/sidecar]
-
+    paths:
+      - packages/mcp-server/src/sidecar
 risks:
-  - "An MCP host could log tool arguments; tool handlers must return only tokens and status, never resolved values."
-
+  - >-
+    An MCP host could log tool arguments; tool handlers must return only tokens and status, never
+    resolved values.
 future:
-  - "Claude Agent SDK / Claude Code hook for coding-agent .env leaks."
-  - "TypeScript SDK and OpenAI Agents SDK adapter."
-
+  - Claude Agent SDK / Claude Code hook for coding-agent .env leaks.
+  - TypeScript SDK and OpenAI Agents SDK adapter.
 decisions:
   - id: mcp-first
     decision: Ship an MCP server as the first harness integration, ahead of any framework-specific SDK.
-    rationale: MCP is the common tool bus across Claude, Cursor, Codex, Gemini, and most 2026 agent runtimes, so one server covers many products without per-vendor adapters. It is the highest-leverage integration surface for the MVP.
+    rationale: >-
+      MCP is the common tool bus across Claude, Cursor, Codex, Gemini, and most 2026 agent runtimes,
+      so one server covers many products without per-vendor adapters. It is the highest-leverage
+      integration surface for the MVP.
     status: accepted
   - id: mcp-not-in-v0-scope
-    decision: Keep CrewAI, AutoGen, Pydantic AI, smolagents, and custom enterprise harnesses out of MVP scope.
-    rationale: Each is another thin adapter on the same contract; supporting them later as examples that call the same SDK or MCP tools avoids maintaining dedicated runtimes.
+    decision: >-
+      Keep CrewAI, AutoGen, Pydantic AI, smolagents, and custom enterprise harnesses out of MVP
+      scope.
+    rationale: >-
+      Each is another thin adapter on the same contract; supporting them later as examples that call
+      the same SDK or MCP tools avoids maintaining dedicated runtimes.
     status: accepted

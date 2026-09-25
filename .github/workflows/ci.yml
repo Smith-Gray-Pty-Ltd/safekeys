@@ -1,0 +1,166 @@
+name: CI
+
+# Gates every change to main and every pull request. Four independent jobs so a
+# failure names the layer that broke, and so a slow job does not hide a fast one.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (build, vet, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l ./apps ./pkg ./test 2>/dev/null)
+          if [ -n "$out" ]; then
+            echo "::error::gofmt needed on:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        # The two-agent demo is the acceptance test: it asserts neither agent's
+        # transcript contains plaintext. It runs against in-process fakes, so no
+        # services are needed here.
+        run: go test ./... -count=1
+
+      - name: conformance vectors
+        # The frozen v1 formats are validated against their JSON Schemas. A
+        # change that breaks the wire format must fail here, not in production.
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 - <<'PY'
+          import json, sys
+          import jsonschema
+
+          pairs = [
+              ("spec/capability-token/v1.schema.json", "spec/capability-token/v1.vectors.json"),
+              ("spec/encrypted-folder/v1.schema.json", "spec/encrypted-folder/v1.vectors.json"),
+          ]
+          total = passed = 0
+          failures = []
+          for schema_path, vectors_path in pairs:
+              validator = jsonschema.Draft202012Validator(json.load(open(schema_path)))
+              for vector in json.load(open(vectors_path))["vectors"]:
+                  total += 1
+                  got = "valid" if not list(validator.iter_errors(vector["input"])) else "invalid"
+                  if got == vector["expect"]["schema"]:
+                      passed += 1
+                  else:
+                      failures.append(f"{schema_path}:{vector['id']} want {vector['expect']['schema']} got {got}")
+          print(f"conformance vectors: {passed}/{total} pass")
+          for f in failures:
+              print(f"::error::{f}")
+          sys.exit(1 if failures else 0)
+          PY
+
+  mcp:
+    name: MCP server (typecheck, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/mcp-server
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/mcp-server/package-lock.json
+
+      - run: npm ci
+
+      - name: typecheck
+        run: npm run typecheck
+
+      - name: test
+        # Covers the token-only tool contracts and asserts no source file
+        # branches on a vendor runtime.
+        run: npm test
+
+      - name: build
+        run: npm run build
+
+  python:
+    name: Python SDK (lint, typecheck, test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/sdk-python
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet -e '.[dev]'
+
+      - name: ruff
+        run: ruff check safekeys tests
+
+      - name: mypy
+        run: mypy safekeys
+
+      - name: pytest
+        run: pytest -q
+
+  usm:
+    name: USM (validate, drift)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: install usm
+        run: npm install --global @smithgray/usm
+
+      - name: validate specs
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if ! usm validate "$f"; then fail=1; fi
+          done < <(find .usm -name '*.usm' | sort)
+          exit $fail
+
+      - name: check
+        run: usm check
+
+      # NOTE: `usm generate --check` is deliberately NOT gated yet. It cannot
+      # pass while two upstream generator bugs are open:
+      #   - Smith-Gray-Pty-Ltd/usm#32 — generate appends a trailing newline to
+      #     AGENTS.md on every run, so the file can never match.
+      #   - Smith-Gray-Pty-Ltd/usm#37 — two generators write
+      #     docs/data/models.md, so --check compares against the wrong one.
+      # Both are reported upstream. Enable this step once they are fixed; until
+      # then gating on it would just train people to ignore a red X.
+      - name: generate (informational)
+        run: usm generate --check || echo "::warning::usm generate --check is known-failing upstream (usm#32, usm#37)"

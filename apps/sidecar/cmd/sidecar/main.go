@@ -10,9 +10,7 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
-	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -26,7 +24,9 @@ import (
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/created"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/folder"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keysource"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/localpolicy"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/resolve"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/revocation"
@@ -54,7 +54,13 @@ func run() error {
 
 	// ── Verifier. Development reads a seed; production loads the control
 	// plane's public keys and the private key never exists here.
-	signer, err := loadVerifier()
+	// ── Verifier. The sidecar holds PUBLIC keys only.
+	//
+	// This is the security boundary: the sidecar runs on the same host as the
+	// secrets, so if it held a signing key a host compromise would let an
+	// attacker mint tokens. It fetches published public keys from the control
+	// plane instead, and never holds a private key at all.
+	verifier, err := openVerifier()
 	if err != nil {
 		return err
 	}
@@ -80,9 +86,9 @@ func run() error {
 	cfg := sidecar.Config{
 		SocketPath: *socket,
 		Audience:   *audience,
-		Verifier:   signer,
+		Verifier:   verifier,
 		Revoked:    revocationChecker(),
-		Policy:     localPolicy{},
+		Policy:     openPolicy(),
 		Source:     folder.New(*folderDir),
 		Unwrap: func(ctx context.Context, keyID, wrapped string) ([]byte, error) {
 			return wrapper.Unwrap(keyID, wrapped)
@@ -108,7 +114,6 @@ func run() error {
 	}()
 
 	log.Printf("sidecar: resolving for audience %q, folder %s, socket %s", *audience, *folderDir, *socket)
-	log.Printf("sidecar: verifier kid=%s alg=%s", signer.KeyID(), signer.Algorithm())
 	if os.Getenv("SAFEKEYS_REVOCATION_OFFLINE") == "1" {
 		log.Println("sidecar: WARNING — revocation checks are OFFLINE; revoked tokens remain usable until TTL expiry")
 	}
@@ -197,16 +202,46 @@ type offlineRevocation struct{}
 
 func (offlineRevocation) IsRevoked(context.Context, string) (bool, error) { return false, nil }
 
-// localPolicy is the MVP local policy: allow requests the issuer already
-// authorised by minting a token for them.
+// openPolicy builds the resolve-time policy checker.
 //
-// The real implementation evaluates operator-authored rules (default deny); see
-// smith-gray/policy-engine. This build performs no scope narrowing beyond what
-// the token itself carries, and is documented as such.
-type localPolicy struct{}
+// Resolve-time policy answers a different question from issuance-time policy:
+// not "may a token for this exist" but "may THIS host inject THIS secret into
+// THIS consumer, right now". A token that exists is not sufficient.
+//
+// Modes:
+//
+//	Fetched — the default. Rules come from the control plane and are cached,
+//	          so an operator's rule change takes effect without a restart.
+//	Static  — SAFEKEYS_POLICY_FILE names a JSON file of rules, for air-gapped
+//	          or bootstrap use. Must parse; a malformed file is fatal rather
+//	          than being treated as an empty (deny-all) set by accident.
+//
+// The default is DENY in both modes: absence of a matching allow is a denial.
+func openPolicy() resolve.PolicyChecker {
+	if path := os.Getenv("SAFEKEYS_POLICY_FILE"); path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatalf("sidecar: read SAFEKEYS_POLICY_FILE: %v", err)
+		}
+		var rules []localpolicy.Rule
+		if err := json.Unmarshal(raw, &rules); err != nil {
+			log.Fatalf("sidecar: parse SAFEKEYS_POLICY_FILE: %v", err)
+		}
+		e := localpolicy.NewFromRules(rules)
+		log.Printf("sidecar: policy = STATIC (%d rules); default deny", e.RuleCount())
+		return e
+	}
 
-func (localPolicy) Allow(ctx context.Context, principal, sid, scope, aud, injection string) (bool, string) {
-	return true, "mvp-local-allow"
+	base := envOr("SAFEKEYS_CONTROL_PLANE_URL", "http://localhost:8080")
+	ttl := envDuration("SAFEKEYS_POLICY_CACHE_TTL", time.Minute)
+	e, err := localpolicy.New(localpolicy.NewHTTP(base, os.Getenv("SAFEKEYS_API_KEY")), ttl)
+	if err != nil {
+		// Fatal, not a warning: a sidecar that cannot load policy would deny
+		// everything, which looks like an outage rather than a misconfiguration.
+		log.Fatalf("sidecar: load resolve-time policy from %s: %v", base, err)
+	}
+	log.Printf("sidecar: policy = FETCHED from %s (%d rules, cache %s); default deny", base, e.RuleCount(), ttl)
+	return e
 }
 
 // logAuditor writes audit records to the sidecar's log.
@@ -219,25 +254,44 @@ func (logAuditor) Record(ctx context.Context, e resolve.AuditRecord) {
 		e.Event, e.Outcome, e.SID, e.JTI, e.Scope, e.Reason, e.Host)
 }
 
-func loadVerifier() (*protocol.Ed25519Signer, error) {
-	seedB64 := os.Getenv("SAFEKEYS_DEV_SIGNING_KEY")
-	if seedB64 == "" {
-		return nil, errors.New(
-			"SAFEKEYS_DEV_SIGNING_KEY is required in this build; " +
-				"production verifies against control-plane public keys")
-	}
-	seed, err := base64.RawStdEncoding.DecodeString(seedB64)
-	if err != nil {
-		seed, err = base64.StdEncoding.DecodeString(seedB64)
+// openVerifier builds the token verifier from PUBLIC key material.
+//
+// Two modes:
+//
+//	Fetched  — the default. Keys come from the control plane's /v1/keys
+//	           endpoint and are cached, refreshing on an unknown kid so a
+//	           rotation propagates without a restart.
+//	Static   — SAFEKEYS_VERIFY_KEYS names a file containing a published JWKS.
+//	           For air-gapped or bootstrap use.
+//
+// There is deliberately NO mode that reads a private key. A compromise of the
+// sidecar must not yield the ability to mint tokens.
+func openVerifier() (resolve.Verifier, error) {
+	if path := os.Getenv("SAFEKEYS_VERIFY_KEYS"); path != "" {
+		raw, err := os.ReadFile(path)
 		if err != nil {
-			return nil, fmt.Errorf("decode signing key: %w", err)
+			return nil, fmt.Errorf("read SAFEKEYS_VERIFY_KEYS: %w", err)
 		}
+		var jwks protocol.PublicJWKS
+		if err := json.Unmarshal(raw, &jwks); err != nil {
+			return nil, fmt.Errorf("parse SAFEKEYS_VERIFY_KEYS: %w", err)
+		}
+		v, err := keysource.NewFromKeys(jwks.Keys)
+		if err != nil {
+			return nil, fmt.Errorf("static keys: %w", err)
+		}
+		log.Printf("sidecar: verifier = STATIC public keys (%d keys, kid set %v)", len(jwks.Keys), jwks.Kids())
+		return v, nil
 	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, fmt.Errorf("signing key must be a %d-byte Ed25519 seed", ed25519.SeedSize)
+
+	base := envOr("SAFEKEYS_CONTROL_PLANE_URL", "http://localhost:8080")
+	ttl := envDuration("SAFEKEYS_KEY_CACHE_TTL", 5*time.Minute)
+	v, err := keysource.New(keysource.NewHTTP(base), ttl)
+	if err != nil {
+		return nil, fmt.Errorf("fetch verification keys from %s: %w", base, err)
 	}
-	kid := envOr("SAFEKEYS_KID", "dev-key-1")
-	return protocol.NewEd25519Signer(kid, ed25519.NewKeyFromSeed(seed))
+	log.Printf("sidecar: verifier = FETCHED public keys from %s (%d keys, cache %s)", base, v.KeyCount(), ttl)
+	return v, nil
 }
 
 func defaultFolderRoot() string {

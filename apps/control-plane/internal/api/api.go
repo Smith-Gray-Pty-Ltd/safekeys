@@ -201,17 +201,21 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"id": rule.ID})
 }
 
-// handlePublicKeys exposes the verification key material a sidecar needs. The
-// response carries public keys only — never a private or symmetric key.
+// handlePublicKeys publishes the verification key material a sidecar needs.
+//
+// It carries PUBLIC keys only. The private signing key never leaves the control
+// plane (and in Phase 1 never leaves the HSM — see ADR key-custody-hsm). This is
+// how a sidecar verifies tokens without holding a signing key of its own, so a
+// compromised sidecar cannot mint one.
+//
+// Unauthenticated by design: publishing a public key is not a disclosure, and
+// requiring a credential here would force verifiers to hold a secret for the
+// privilege of checking a signature — reintroducing the problem this endpoint
+// exists to solve.
 func (s *Server) handlePublicKeys(w http.ResponseWriter, r *http.Request) {
-	type keyInfo struct {
-		KID string `json:"kid"`
-		Alg string `json:"alg"`
-		PEM string `json:"pem"`
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"issuer": s.issuerIssuer(),
-		"keys":   []keyInfo{},
+	writeJSON(w, http.StatusOK, protocol.PublicJWKS{
+		Issuer: s.issuerIssuer(),
+		Keys:   s.issuer.PublicKeys(),
 	})
 }
 

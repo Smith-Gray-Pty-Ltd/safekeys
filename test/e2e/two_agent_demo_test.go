@@ -34,11 +34,20 @@ func TestTwoAgentDemoNoPlaintext(t *testing.T) {
 	}
 	defer store.Close()
 
+	// The control plane role: holds the signing key.
 	_, prv, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	signer, err := protocol.NewEd25519Signer("demo-key", prv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The sidecar role: PUBLIC keys only. Derived from the signer's published
+	// set, exactly as a real sidecar fetches them from /v1/keys. It never sees
+	// the private key.
+	publicVerifier, err := protocol.NewKeySetVerifier(signer.PublicKeys())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +113,7 @@ func TestTwoAgentDemoNoPlaintext(t *testing.T) {
 	srv := sidecar.New(sidecar.Config{
 		SocketPath: filepath.Join(tmp, "sidecar.sock"),
 		Audience:   audience,
-		Verifier:   signer,
+		Verifier:   publicVerifier,
 		Source:     folder.New(filepath.Join(tmp, "folder")),
 		Unwrap:     unwrapAdapter(store),
 		Auditor:    demoAudit,
@@ -237,6 +246,7 @@ func TestPolicyDenyFailsClosed(t *testing.T) {
 
 	_, prv, _ := ed25519.GenerateKey(nil)
 	signer, _ := protocol.NewEd25519Signer("k", prv)
+	publicVerifier, _ := protocol.NewKeySetVerifier(signer.PublicKeys())
 
 	objID := "obj_deny_0001"
 	dek, _ := protocol.NewDEK()
@@ -263,7 +273,7 @@ func TestPolicyDenyFailsClosed(t *testing.T) {
 	srv := sidecar.New(sidecar.Config{
 		SocketPath: filepath.Join(tmp, "s.sock"),
 		Audience:   "env-demo",
-		Verifier:   signer,
+		Verifier:   publicVerifier,
 		Source:     folder.New(filepath.Join(tmp, "folder")),
 		Unwrap:     unwrapAdapter(store),
 		Policy:     denyPolicy{},

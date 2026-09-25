@@ -2,160 +2,232 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/control-plane-db
 $type: service
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-26"
 summary: >-
   Postgres data model for the control plane — objects, wrapping keys, token issuance, the jti
   revocation denylist, policy rules, and the append-only audit log. Stores identifiers, policy, and
-  outcomes only: no plaintext, no unwrapped keys. Wrapped DEKs live with the folder; the KEK lives in
-  the key store.
-
+  outcomes only: no plaintext, no unwrapped keys. Wrapped DEKs live with the folder; the KEK lives
+  in the key store.
 $system: smith-gray/system
 name: Control Plane Database
-status: planned
+status: built
 type: database
 runtime: postgres
 port: 5432
 depends_on: []
-
 tech_stack:
   engine: Postgres 16
   migrations: SQL migrations applied at boot
   access: pgx (Go) with prepared statements
   backups: managed snapshots plus PITR
-
 dev:
-  command: "docker run -p 5432:5432 -e POSTGRES_DB=safekeys postgres:16"
+  command: docker run -p 5432:5432 -e POSTGRES_DB=safekeys postgres:16
   env:
     DATABASE_URL: postgres://localhost:5432/safekeys
-
 prod:
   url: ""
   region: ""
   deployment_ref: ""
-
 testing:
   framework: Go testing with testcontainers
-  command: "go test ./apps/control-plane/internal/store/..."
-  coverage_target: "85%"
-
+  command: go test ./apps/control-plane/internal/store/...
+  coverage_target: 85%
 security:
   auth_method: Postgres role per component; sidecar holds no direct DB access
   secrets_ref: docs/help/security-model.md
-
 modules:
   - name: objects
     purpose: Registered secret objects and their owning principals and wrapping policy
-    paths: [apps/control-plane/internal/store/objects.go]
+    paths:
+      - apps/control-plane/internal/store/objects.go
   - name: tokens
     purpose: Issued token records keyed by jti, plus the revocation denylist
-    paths: [apps/control-plane/internal/store/tokens.go]
+    paths:
+      - apps/control-plane/internal/store/tokens.go
   - name: audit
     purpose: Append-only resolve, deny, issue, and revoke records
-    paths: [apps/control-plane/internal/store/audit.go]
+    paths:
+      - apps/control-plane/internal/store/audit.go
   - name: policy
     purpose: Resolution policy rules evaluated at issue and resolve time
-    paths: [apps/control-plane/internal/store/policy.go]
+    paths:
+      - apps/control-plane/internal/store/policy.go
   - name: migrations
     purpose: Versioned SQL migrations
-    paths: [apps/control-plane/internal/store/migrations]
-
+    paths:
+      - apps/control-plane/internal/store/migrations
 future:
-  - "Partition the audit table by month and export to cold storage for retention."
-  - "Row-level policy scoping for the multi-tenant hosted authority."
-
+  - Partition the audit table by month and export to cold storage for retention.
+  - Row-level policy scoping for the multi-tenant hosted authority.
 decisions:
   - id: postgres-not-embedded
     decision: Use Postgres rather than an embedded store (SQLite) for the control plane.
-    rationale: Policy evaluation and audit append both need transactions and concurrent writers across sidecars. Revocation must be immediately visible to every sidecar, which a single-writer embedded store cannot serve reliably once more than one resolver exists.
+    rationale: >-
+      Policy evaluation and audit append both need transactions and concurrent writers across
+      sidecars. Revocation must be immediately visible to every sidecar, which a single-writer
+      embedded store cannot serve reliably once more than one resolver exists.
     status: accepted
   - id: denylist-not-allowlist
     decision: Store the revocation denylist rather than an allowlist of valid tokens.
-    rationale: An allowlist would require every issued token to be replicated to every sidecar and pruned on expiry — unbounded growth on the hot path. The denylist is small, only holds actively revoked ids, and is checked alongside TTL, which already bounds the population of live tokens.
+    rationale: >-
+      An allowlist would require every issued token to be replicated to every sidecar and pruned on
+      expiry — unbounded growth on the hot path. The denylist is small, only holds actively revoked
+      ids, and is checked alongside TTL, which already bounds the population of live tokens.
     status: accepted
   - id: audit-never-contains-secrets
     decision: The audit table stores identifiers and outcomes only, never values.
-    rationale: The audit log is central and long-lived, which makes it a high-value target. Metadata-only means a breach of the log is an accountability problem rather than a secret disclosure — and it is asserted by a schema-level test on every insert.
+    rationale: >-
+      The audit log is central and long-lived, which makes it a high-value target. Metadata-only
+      means a breach of the log is an accountability problem rather than a secret disclosure — and
+      it is asserted by a schema-level test on every insert.
     status: accepted
   - id: wrapped-dek-not-in-db
     decision: Wrapped DEKs live in the folder manifest, not in Postgres.
-    rationale: Keeping key material out of the database means a database compromise cannot yield even wrapped keys, and the folder remains the single portable unit that carries its own wrapped key. The database holds only the KEK identifier (wrapping_kid) needed to route an unwrap.
+    rationale: >-
+      Keeping key material out of the database means a database compromise cannot yield even wrapped
+      keys, and the folder remains the single portable unit that carries its own wrapped key. The
+      database holds only the KEK identifier (wrapping_kid) needed to route an unwrap.
     status: accepted
-
-project_structure: |
+project_structure: >
   ## Tables
 
+
   ### objects
+
   Registered secret objects. One row per object or folder.
 
+
   | Column | Type | Notes |
+
   |--------|------|-------|
-  | `id` | `text` PK | Object identifier; matches a token's `sid`. Pattern `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. |
+
+  | `id` | `text` PK | Object identifier; matches a token's `sid`. Pattern
+  `^[A-Za-z0-9][A-Za-z0-9._:-]*$`. |
+
   | `folder_id` | `text` NULL | Groups objects into a folder transport unit, when applicable. |
+
   | `owner_principal` | `text` | Issuing principal for attribution (e.g. `smith-gray/agent-a`). |
+
   | `content_type` | `text` NULL | Hint mirrored from the manifest. Never used to gate decryption. |
-  | `wrapping_kid` | `text` | The KEK that wraps this object's DEK. Routes the unwrap; holds no key material. |
+
+  | `wrapping_kid` | `text` | The KEK that wraps this object's DEK. Routes the unwrap; holds no key
+  material. |
+
   | `created_at` | `timestamptz` | Row creation. |
+
   | `revoked_at` | `timestamptz` NULL | Set when the object is retired. |
+
 
   Indexes: PK on `id`; btree on `(owner_principal)`, `(folder_id)`.
 
+
   ### tokens
+
   Issued capability tokens, keyed by the unique `jti`.
 
+
   | Column | Type | Notes |
+
   |--------|------|-------|
+
   | `jti` | `text` PK | Unique token id. Never reused across issuers. |
+
   | `sid` | `text` FK → objects(id) | Target object. |
+
   | `iss` | `text` | Issuer identifier. |
+
   | `sub` | `text` NULL | Subject principal, for attribution. |
+
   | `scope` | `text[]` | Granted scopes; subset of read, unwrap, inject-env, inject-file, sign. |
+
   | `aud` | `text` | Audience / environment binding. |
+
   | `nbf` | `timestamptz` | Not-before. |
+
   | `exp` | `timestamptz` | Expiry. |
+
   | `issued_at` | `timestamptz` | Mint time. |
+
   | `revoked_at` | `timestamptz` NULL | Set on revocation. Non-null ⇒ denied. |
 
-  Indexes: PK on `jti`; btree on `(sid)`, `(exp)`, and a **partial index on `(jti) WHERE revoked_at IS NOT NULL`** — the denylist lookup that runs on every resolve.
+
+  Indexes: PK on `jti`; btree on `(sid)`, `(exp)`, and a **partial index on `(jti) WHERE revoked_at
+  IS NOT NULL`** — the denylist lookup that runs on every resolve.
+
 
   ### audit
+
   Append-only. No update or delete path is exposed through the application.
 
+
   | Column | Type | Notes |
+
   |--------|------|-------|
+
   | `id` | `bigserial` PK | Monotonic; also the ordering key. |
+
   | `at` | `timestamptz` | Event time. |
+
   | `event` | `text` | `issue`, `revoke`, `resolve`, `deny`, or `policy_deny`. |
+
   | `jti` | `text` NULL | Token involved, when applicable. |
+
   | `sid` | `text` NULL | Object involved. |
+
   | `principal` | `text` NULL | Requester. |
+
   | `host` | `text` NULL | Resolving host. |
+
   | `scope` | `text` NULL | Requested scope. |
+
   | `outcome` | `text` | `allowed` or `denied`. |
+
   | `reason` | `text` NULL | Machine-readable denial reason (e.g. `exp`, `aud`, `revoked`). |
-  | `detail` | `jsonb` NULL | Extra non-secret context. Schema-constrained to forbid secret-shaped keys. |
+
+  | `detail` | `jsonb` NULL | Extra non-secret context. Schema-constrained to forbid secret-shaped
+  keys. |
+
 
   **Invariant:** no column may hold plaintext or key material. `detail` is validated
+
   against a denylist of keys (`value`, `secret`, `dek`, `kek`, `plaintext`) before
+
   insert.
 
+
   ### policy_rules
+
   Resolution policy, evaluated at issuance and again locally at resolve.
 
+
   | Column | Type | Notes |
+
   |--------|------|-------|
+
   | `id` | `text` PK | Rule identifier; referenced in audit `reason`. |
+
   | `effect` | `text` | `allow` or `deny`. |
+
   | `principal` | `text` NULL | Match requester (null = any). |
+
   | `sid` | `text` NULL | Match object (null = any). |
+
   | `scope` | `text[]` | Scopes this rule governs. |
+
   | `aud` | `text` NULL | Audience / environment the rule applies to. |
+
   | `injection_method` | `text` NULL | Restrict to one of env, file, socket, exec. |
+
   | `priority` | `integer` | Evaluation order; higher wins. |
+
   | `created_at` | `timestamptz` | Row creation. |
+
 
   Indexes: PK on `id`; btree on `(priority DESC)`.
 
+
   ## Invariants enforced in the database
+
 
   1. **No secret material** — no table has a column capable of holding plaintext, a
      DEK, or a KEK. Asserted by a schema test in CI.
@@ -170,7 +242,11 @@ project_structure: |
 
   ## Wrapped keys are deliberately absent
 
+
   There is no `wrapped_dek` column. The wrapped DEK lives in the folder's
+
   `manifest.json`, so the database never holds key-shaped data and the folder stays
+
   the single portable unit. Postgres stores only `wrapping_kid` — an identifier,
+
   not material — to route an unwrap to the right KEK in the key store.

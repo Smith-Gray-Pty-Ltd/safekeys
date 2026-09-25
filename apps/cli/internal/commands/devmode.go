@@ -1,47 +1,38 @@
 package commands
 
 import (
-	"crypto/ed25519"
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/folder"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keysource"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 )
 
-// loadLocalSigner builds the verifier for development mode.
+// loadLocalVerifier builds the verifier for the CLI's local (no-sidecar)
+// fallback path.
 //
-// The key is read from a base64 Ed25519 seed in SAFEKEYS_DEV_SIGNING_KEY.
-// Development only: production verification uses public keys fetched from the
-// control plane, and the signing key lives in an HSM (ADR key-custody-hsm).
-func loadLocalSigner(env Env) (*protocol.Ed25519Signer, *keystore.Local, error) {
-	seedB64 := os.Getenv("SAFEKEYS_DEV_SIGNING_KEY")
-	if seedB64 == "" {
-		return nil, nil, fmt.Errorf("SAFEKEYS_DEV_SIGNING_KEY is not set (development mode requires a dev key)")
-	}
-	seed, err := base64.RawStdEncoding.DecodeString(seedB64)
+// Like the sidecar, the CLI holds PUBLIC keys only, fetched from the control
+// plane. It deliberately does not read a signing key: even the development
+// fallback should not demonstrate an architecture we would refuse to ship.
+//
+// Note this fallback exists so the CLI is usable without a running sidecar
+// during single-host development. It is NOT the supported path — the sidecar is
+// the only component permitted to resolve a token — and the caller warns when
+// it is taken.
+func loadLocalVerifier(env Env) (protocol.Verifier, *keystore.Local, error) {
+	verifier, err := keysource.New(keysource.NewHTTP(env.ControlPlaneURL), 5*time.Minute)
 	if err != nil {
-		seed, err = base64.StdEncoding.DecodeString(seedB64)
-		if err != nil {
-			return nil, nil, fmt.Errorf("decode dev signing key: %w", err)
-		}
-	}
-	if len(seed) != ed25519.SeedSize {
-		return nil, nil, fmt.Errorf("dev signing key must be a %d-byte seed", ed25519.SeedSize)
-	}
-	prv := ed25519.NewKeyFromSeed(seed)
-	signer, err := protocol.NewEd25519Signer("dev-key-1", prv)
-	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("fetch verification keys from %s: %w", env.ControlPlaneURL, err)
 	}
 	store, err := keystore.NewLocal(env.KeystorePath)
 	if err != nil {
 		return nil, nil, err
 	}
-	return signer, store, nil
+	return verifier, store, nil
 }
 
 // folderSource opens a folder as a resolve source.

@@ -66,11 +66,14 @@ type ManifestSource interface {
 	Load(ctx context.Context, sid string) (*protocol.ManifestObject, []byte, error)
 }
 
-// Verifier is the capability check the resolver needs. It is the full
-// protocol.Signer interface so the same implementation can both mint (control
-// plane) and verify (sidecar) without a parallel type.
+// Verifier is the capability check the resolver needs.
+//
+// It is deliberately protocol.Verifier (public keys only) rather than
+// protocol.Signer. The resolver runs in the sidecar, on the same host as the
+// secrets, so requiring only verification makes it structurally impossible for
+// a compromised sidecar to mint a token — there is no Sign method in scope.
 type Verifier interface {
-	protocol.Signer
+	protocol.Verifier
 }
 
 // Request is a resolve request from a local caller.

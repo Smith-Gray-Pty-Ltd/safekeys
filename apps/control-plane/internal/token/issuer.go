@@ -46,6 +46,11 @@ func (i *Issuer) SetClock(f func() time.Time) { i.now = f }
 // IssuerURL returns the issuer identifier embedded in minted tokens.
 func (i *Issuer) IssuerURL() string { return i.issuer }
 
+// PublicKeys returns the public half of every key this issuer can mint under,
+// for publication to verifiers. It returns public material only — the private
+// key never leaves the issuer.
+func (i *Issuer) PublicKeys() []protocol.PublicKey { return i.signer.PublicKeys() }
+
 // MaxTTL bounds token lifetime. TTLs are minutes to hours, never days.
 const MaxTTL = 12 * time.Hour
 

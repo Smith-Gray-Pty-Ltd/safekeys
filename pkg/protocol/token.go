@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -75,18 +76,62 @@ func ScopeAllows(granted []string, requested string) bool {
 	return false
 }
 
-// Signer mints and verifies tokens. Implementations hold the signing key; in
-// Phase 1 that key is HSM- or secure-element-backed — see ADR key-custody-hsm.
-type Signer interface {
-	// Sign returns the compact JWS over the given claims.
-	Sign(h Header, c Claims) (string, error)
+// Verifier checks token signatures. It holds PUBLIC key material only.
+//
+// This is the interface the sidecar uses. Keeping it separate from Signer is a
+// deliberate security boundary: the sidecar runs on the same host as the
+// secrets, so it is the component most likely to be attacked. If it held a
+// signing key, compromising it would let an attacker mint tokens and defeat the
+// entire model. Splitting the interfaces makes that structurally impossible to
+// do by accident — a Verifier simply has no Sign method to call.
+type Verifier interface {
 	// Verify checks the signature and returns the protected header. It must
 	// reject any algorithm not on the allowlist.
 	Verify(jws string) (Header, error)
+	// VerifyWith checks the signature against a specific key and alg, for
+	// multi-key deployments where several issuers or a rotation overlap exist.
+	VerifyWith(kid, alg string, jws string) (Header, error)
+}
+
+// Signer mints tokens. Implementations hold the PRIVATE signing key; in Phase 1
+// that key is HSM- or secure-element-backed — see ADR key-custody-hsm.
+//
+// Only the control plane needs this. The sidecar must not: see Verifier.
+type Signer interface {
+	Verifier
+	// Sign returns the compact JWS over the given claims.
+	Sign(h Header, c Claims) (string, error)
 	// KeyID returns the kid this signer issues under.
 	KeyID() string
 	// Algorithm returns the JWS alg this signer uses.
 	Algorithm() string
+	// PublicKeys returns the public half of every key this signer can issue
+	// under, for publication to verifiers.
+	PublicKeys() []PublicKey
+}
+
+// PublicKey is published key material a verifier needs. It carries no private
+// component by construction.
+type PublicKey struct {
+	KID string `json:"kid"`
+	Alg string `json:"alg"`
+	// Public is the PKIX DER-encoded public key, base64 (standard) encoded.
+	Public string `json:"public"`
+}
+
+// PublicJWKS is the published key set.
+type PublicJWKS struct {
+	Issuer string      `json:"issuer"`
+	Keys   []PublicKey `json:"keys"`
+}
+
+// Kids returns the key ids in the set, for logging.
+func (j PublicJWKS) Kids() []string {
+	out := make([]string, 0, len(j.Keys))
+	for _, k := range j.Keys {
+		out = append(out, k.KID)
+	}
+	return out
 }
 
 // ─── Ed25519 signer ─────────────────────────────────────────────────────────
@@ -128,11 +173,14 @@ func (s *Ed25519Signer) Sign(h Header, c Claims) (string, error) {
 	})
 }
 
-// Verify implements Signer.
+// Verify implements Verifier using this signer's own public key.
 func (s *Ed25519Signer) Verify(jws string) (Header, error) {
 	return verifyCompact(jws, func(h Header, signingInput, sig []byte) error {
 		if h.Alg != AlgEdDSA {
 			return NewDenial(ReasonAlgNotAllowed)
+		}
+		if h.Kid != s.kid {
+			return NewDenial(ReasonKidUnknown)
 		}
 		pub, ok := s.prv.Public().(ed25519.PublicKey)
 		if !ok {
@@ -143,6 +191,19 @@ func (s *Ed25519Signer) Verify(jws string) (Header, error) {
 		}
 		return nil
 	})
+}
+
+// VerifyWith implements Verifier. It only accepts this signer's own kid.
+func (s *Ed25519Signer) VerifyWith(kid, alg string, jws string) (Header, error) {
+	if kid != s.kid {
+		return Header{}, NewDenial(ReasonKidUnknown)
+	}
+	return s.Verify(jws)
+}
+
+// PublicKeys implements Signer, publishing the public half for verifiers.
+func (s *Ed25519Signer) PublicKeys() []PublicKey {
+	return []PublicKey{ed25519PublicKey(s.kid, s.prv.Public().(ed25519.PublicKey))}
 }
 
 // ─── ES256 signer ───────────────────────────────────────────────────────────
@@ -185,11 +246,14 @@ func (s *ES256Signer) Sign(h Header, c Claims) (string, error) {
 	})
 }
 
-// Verify implements Signer.
+// Verify implements Verifier using this signer's own public key.
 func (s *ES256Signer) Verify(jws string) (Header, error) {
 	return verifyCompact(jws, func(h Header, signingInput, sig []byte) error {
 		if h.Alg != AlgES256 {
 			return NewDenial(ReasonAlgNotAllowed)
+		}
+		if h.Kid != s.kid {
+			return NewDenial(ReasonKidUnknown)
 		}
 		size := (s.prv.Curve.Params().BitSize + 7) / 8
 		if len(sig) != 2*size {
@@ -203,6 +267,175 @@ func (s *ES256Signer) Verify(jws string) (Header, error) {
 		}
 		return nil
 	})
+}
+
+// VerifyWith implements Verifier. It only accepts this signer's own kid.
+func (s *ES256Signer) VerifyWith(kid, alg string, jws string) (Header, error) {
+	if kid != s.kid {
+		return Header{}, NewDenial(ReasonKidUnknown)
+	}
+	return s.Verify(jws)
+}
+
+// PublicKeys implements Signer.
+func (s *ES256Signer) PublicKeys() []PublicKey {
+	return []PublicKey{ecdsaPublicKey(s.kid, &s.prv.PublicKey)}
+}
+
+// ─── Public-key verifier ────────────────────────────────────────────────────
+
+// KeySetVerifier verifies tokens against a published set of PUBLIC keys.
+//
+// This is what the sidecar uses. It holds no private key and therefore cannot
+// mint a token even if the host is fully compromised — the strongest property
+// available to a verifier in the software-only phase.
+type KeySetVerifier struct {
+	keys map[string]PublicKey
+	// allowMissing, when true, permits a token whose kid is unknown (development
+	// only; production must be false so an unknown key is a hard denial).
+	allowMissing bool
+}
+
+// NewKeySetVerifier builds a verifier from published keys.
+func NewKeySetVerifier(keys []PublicKey) (*KeySetVerifier, error) {
+	m := make(map[string]PublicKey, len(keys))
+	for _, k := range keys {
+		if k.KID == "" || k.Alg == "" || k.Public == "" {
+			return nil, NewDenial(ReasonMalformed)
+		}
+		if !IsAlgorithmAllowed(k.Alg) {
+			return nil, NewDenial(ReasonAlgNotAllowed)
+		}
+		m[k.KID] = k
+	}
+	if len(m) == 0 {
+		return nil, NewDenial(ReasonKidUnknown)
+	}
+	return &KeySetVerifier{keys: m}, nil
+}
+
+// Keys returns the published keys this verifier holds. Public material only.
+func (v *KeySetVerifier) Keys() map[string]PublicKey {
+	out := make(map[string]PublicKey, len(v.keys))
+	for k, val := range v.keys {
+		out[k] = val
+	}
+	return out
+}
+
+// Verify implements Verifier, resolving the key by the token's kid.
+func (v *KeySetVerifier) Verify(jws string) (Header, error) {
+	// Read the header first so we know which key to use. The algorithm is still
+	// allowlist-checked before any key material is touched.
+	hdr, err := DecodeHeader(jws)
+	if err != nil {
+		return Header{}, err
+	}
+	return v.VerifyWith(hdr.Kid, hdr.Alg, jws)
+}
+
+// VerifyWith implements Verifier against a named key.
+func (v *KeySetVerifier) VerifyWith(kid, alg string, jws string) (Header, error) {
+	k, ok := v.keys[kid]
+	if !ok {
+		// An unknown key is a hard denial: never fall back to a default key,
+		// which is the classic verification-bypass.
+		return Header{}, NewDenial(ReasonKidUnknown)
+	}
+	if k.Alg != alg {
+		return Header{}, NewDenial(ReasonAlgNotAllowed)
+	}
+	return verifyCompact(jws, func(h Header, signingInput, sig []byte) error {
+		if h.Kid != kid {
+			return NewDenial(ReasonKidUnknown)
+		}
+		return verifyWithPublicKey(k, signingInput, sig)
+	})
+}
+
+// verifyWithPublicKey checks a signature against a published public key.
+func verifyWithPublicKey(k PublicKey, signingInput, sig []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(k.Public)
+	if err != nil {
+		return NewDenial(ReasonSignatureInvalid)
+	}
+	pub, err := x509.ParsePKIXPublicKey(raw)
+	if err != nil {
+		return NewDenial(ReasonSignatureInvalid)
+	}
+	switch key := pub.(type) {
+	case ed25519.PublicKey:
+		if k.Alg != AlgEdDSA || !ed25519.Verify(key, signingInput, sig) {
+			return NewDenial(ReasonSignatureInvalid)
+		}
+		return nil
+	case *ecdsa.PublicKey:
+		if k.Alg != AlgES256 {
+			return NewDenial(ReasonSignatureInvalid)
+		}
+		size := (key.Curve.Params().BitSize + 7) / 8
+		if len(sig) != 2*size {
+			return NewDenial(ReasonSignatureInvalid)
+		}
+		digest := sha256.Sum256(signingInput)
+		r := newBigInt(sig[:size])
+		s := newBigInt(sig[size:])
+		if !ecdsa.Verify(key, digest[:], r, s) {
+			return NewDenial(ReasonSignatureInvalid)
+		}
+		return nil
+	default:
+		return NewDenial(ReasonSignatureInvalid)
+	}
+}
+
+// ed25519PublicKey marshals a public key for publication.
+func ed25519PublicKey(kid string, pub ed25519.PublicKey) PublicKey {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		// Marshalling a valid public key cannot fail; a failure here would be a
+		// programming error, so publish an empty set rather than panic.
+		return PublicKey{KID: kid, Alg: AlgEdDSA}
+	}
+	return PublicKey{KID: kid, Alg: AlgEdDSA, Public: base64.StdEncoding.EncodeToString(der)}
+}
+
+// ecdsaPublicKey marshals an ECDSA public key for publication.
+func ecdsaPublicKey(kid string, pub *ecdsa.PublicKey) PublicKey {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return PublicKey{KID: kid, Alg: AlgES256}
+	}
+	return PublicKey{KID: kid, Alg: AlgES256, Public: base64.StdEncoding.EncodeToString(der)}
+}
+
+// DecodeHeader extracts the protected header from a compact JWS without
+// verifying the signature. Callers MUST verify before trusting any claim; this
+// exists so a verifier can learn which key to use, and is safe because the
+// algorithm is still allowlist-checked here and the signature checked next.
+func DecodeHeader(jws string) (Header, error) { return decodeHeader(jws) }
+
+// decodeHeader extracts the protected header without verifying.
+func decodeHeader(jws string) (Header, error) {
+	parts := strings.Split(jws, ".")
+	if len(parts) != 3 {
+		return Header{}, NewDenial(ReasonMalformed)
+	}
+	hb, err := b64decode(parts[0])
+	if err != nil {
+		return Header{}, NewDenial(ReasonMalformed)
+	}
+	var h Header
+	if err := json.Unmarshal(hb, &h); err != nil {
+		return Header{}, NewDenial(ReasonMalformed)
+	}
+	if !IsAlgorithmAllowed(h.Alg) {
+		return Header{}, NewDenial(ReasonAlgNotAllowed)
+	}
+	if h.Kid == "" {
+		return Header{}, NewDenial(ReasonKidMissing)
+	}
+	return h, nil
 }
 
 // ─── Shared compact-JWS mechanics ───────────────────────────────────────────
@@ -389,9 +622,9 @@ func ParseURI(raw string) (ParsedURI, error) {
 // bounds, then audience, then sid/path agreement, then scope. No key-store
 // interaction may occur before this returns nil — that is enforced by the
 // caller performing the unwrap only after VerifyToken succeeds.
-func VerifyToken(s Signer, p ParsedURI, audience string, now time.Time, revoked func(jti string) bool) (Claims, error) {
+func VerifyToken(v Verifier, p ParsedURI, audience string, now time.Time, revoked func(jti string) bool) (Claims, error) {
 	// 1. Signature and algorithm (Verify rejects a disallowed alg internally).
-	if _, err := s.Verify(p.JWS); err != nil {
+	if _, err := v.Verify(p.JWS); err != nil {
 		return Claims{}, err
 	}
 
