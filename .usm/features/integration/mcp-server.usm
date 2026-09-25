@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: smith-gray/integration-mcp-server
 $type: feature
 $version: 1
-$last_updated: "2026-09-23"
+$last_updated: "2026-09-25"
 summary: |
   The Safekeys MCP server exposes secret tooling to every MCP-capable agent runtime — Claude,
   Cursor, Codex, Gemini — through one standard tool bus. It is the highest-leverage MVP
@@ -165,6 +165,38 @@ decisions:
       vendor, making the property enforced rather than aspirational.
     status: accepted
     date: "2026-09-23"
+  - id: no-interactive-secret-prompt
+    decision: >-
+      create_secret takes a file path the sidecar reads; it never prompts the operator interactively
+      and never accepts a literal value parameter.
+    rationale: >-
+      An interactive prompt would depend on the MCP client supporting elicitation, and a value
+      parameter would put the secret in model context. Both were checked empirically rather than
+      assumed: opencode 1.18.9 declares only roots in its client capabilities — no elicitation form
+      or url mode — so a prompt-based flow could not work in the harness we target first. MCP itself
+      forbids requesting secrets via form-mode elicitation, and the sanctioned URL mode requires
+      client support too. A file path needs neither: it works in any client, and the model authoring
+      the call never holds the bytes.
+    alternatives:
+      - option: Prompt the operator via MCP elicitation (form mode)
+        rejected_because: >-
+          MCP explicitly forbids requesting credentials through form-mode elicitation, and opencode
+          does not declare the capability, so the flow would silently fail in our primary harness.
+      - option: URL mode elicitation to an out-of-band page
+        rejected_because: >-
+          The correct pattern for asking an operator for a credential, and worth revisiting for a
+          hosted setup — but it requires client support, cannot move a secret to a *different*
+          agent, and adds a web surface. A local file is simpler and works everywhere.
+      - option: Accept a value parameter on create_secret
+        rejected_because: >-
+          Puts the plaintext in model context, which is the one thing Safekeys exists to prevent,
+          and a prompt injection could then capture it.
+    consequences: >-
+      The caller must write the secret to a file out-of-band first. This is a deliberate ergonomic
+      cost. Verified against opencode's actual declared capabilities, so the decision rests on
+      evidence rather than an assumption about the ecosystem.
+    status: accepted
+    date: "2026-09-26"
 implementation:
   primary: packages/mcp-server/src/index.ts
   test_code: packages/mcp-server/src/tools/tools.test.ts

@@ -16,6 +16,7 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import { SidecarClient, SidecarUnavailableError, SidecarDeniedError } from "./sidecar/client.js";
 import {
@@ -26,6 +27,7 @@ import {
   RevokeTokenInput,
 } from "./tools/index.js";
 import type { ToolResult } from "./tools/index.js";
+import { SERVER_INSTRUCTIONS, RESOURCES, FOLDER_README_TEMPLATE } from "./instructions.js";
 
 /** Version reported to the host runtime. */
 export const VERSION = "0.1.0";
@@ -63,8 +65,48 @@ export function renderResult(r: ToolResult): ToolContent {
  * Exported so tests can drive it in-process without spawning a child.
  */
 export function buildServer(client: SidecarClient): McpServer {
-  const server = new McpServer({ name: "safekeys", version: VERSION });
+  // The instructions field is delivered in the initialize response, so an agent
+  // has the operating contract before it calls anything. It carries the "never
+  // ask for a value" rule, which no per-tool description can express.
+  const server = new McpServer(
+    { name: "safekeys", version: VERSION },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
   const handlers = makeHandlers(client);
+
+  // Documentation resources. Static text compiled into the server — none of
+  // these can carry a secret, because none of them describe an object.
+  for (const r of RESOURCES) {
+    server.registerResource(
+      r.name,
+      r.uri,
+      { title: r.title, description: r.description, mimeType: r.mimeType },
+      async (uri) => ({
+        contents: [{ uri: uri.href, mimeType: r.mimeType, text: r.text }],
+      }),
+    );
+  }
+
+  // A template for any folder's README, so a caller can ask what an object is
+  // without being handed ciphertext.
+  server.registerResource(
+    "folder-readme",
+    new ResourceTemplate("safekeys://folder/{id}/readme", { list: undefined }),
+    {
+      title: "Encrypted folder README",
+      description: "Explains what a Safekeys folder is and how it is used. Contains no secrets.",
+      mimeType: "text/markdown",
+    },
+    async (uri, vars) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: `# Safekeys folder: ${String(vars.id ?? "unknown")}\n\n${FOLDER_README_TEMPLATE}`,
+        },
+      ],
+    }),
+  );
 
   server.registerTool(
     "create_secret",
