@@ -6,7 +6,10 @@
   "mcp": {
     "safekeys": {
       "type": "local",
-      "command": ["node", "packages/mcp-server/dist/index.js"],
+      "command": [
+        "node",
+        "packages/mcp-server/dist/index.js"
+      ],
       "enabled": true
     }
   }

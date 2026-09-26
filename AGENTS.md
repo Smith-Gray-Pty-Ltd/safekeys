@@ -57,7 +57,7 @@ This project uses USM for structured system documentation. Follow this workflow:
 2. Call `usm_draft_feature` with structured fields (summary, intent, flows, contracts, tests)
 3. Show the human the generated markdown preview for review
 4. If approved, call `usm_write_feature` to persist the .usm file
-5. **Return the live docs link** (e.g. `http://localhost:5173/features/...`) so the human can review the rendered spec in the browser
+5. **Return the live docs link** so the human can review the rendered spec in the browser. The MCP tool returns `docs_url`/`docs_path` — use those. Docs routes mirror `.usm/features/<area>/<slug>.usm` at `/features/<area>/<slug>` (the `$system` namespace is dropped), served at the port `usm docs serve --watch` reports
 6. Wait for human confirmation that the spec is correct before implementing
 7. Implement the feature in code
 8. Call `usm_update_feature_status` to mark as built (with implementation path)

@@ -154,13 +154,10 @@ jobs:
       - name: check
         run: usm check
 
-      # NOTE: `usm generate --check` is deliberately NOT gated yet. It cannot
-      # pass while two upstream generator bugs are open:
-      #   - Smith-Gray-Pty-Ltd/usm#32 — generate appends a trailing newline to
-      #     AGENTS.md on every run, so the file can never match.
-      #   - Smith-Gray-Pty-Ltd/usm#37 — two generators write
-      #     docs/data/models.md, so --check compares against the wrong one.
-      # Both are reported upstream. Enable this step once they are fixed; until
-      # then gating on it would just train people to ignore a red X.
-      - name: generate (informational)
-        run: usm generate --check || echo "::warning::usm generate --check is known-failing upstream (usm#32, usm#37)"
+      # Gate on generated-output drift. This was blocked until USM 0.8.1 fixed
+      # two non-idempotency bugs we reported upstream (usm#32: generate appended
+      # a trailing newline to AGENTS.md every run; usm#37: two generators wrote
+      # docs/data/models.md, so --check compared against the wrong one). Both are
+      # fixed, so a stale generated file is now a real failure worth failing on.
+      - name: generate --check (no drift)
+        run: usm generate --check
