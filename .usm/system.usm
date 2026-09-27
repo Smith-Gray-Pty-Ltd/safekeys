@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/system
+$id: safekeys/system
 $type: system
 $version: 1
 $last_updated: "2026-09-22"
@@ -496,7 +496,7 @@ reference_pages:
         rows:
           - ["id", "text PK", "Object identifier; matches a token's sid. Pattern ^[A-Za-z0-9][A-Za-z0-9._:-]*$."]
           - ["folder_id", "text NULL", "Groups objects into a folder transport unit."]
-          - ["owner_principal", "text", "Issuing principal for attribution (e.g. smith-gray/agent-a)."]
+          - ["owner_principal", "text", "Issuing principal for attribution (e.g. example-org/agent-a)."]
           - ["content_type", "text NULL", "Hint mirrored from the manifest. Never used to gate decryption."]
           - ["wrapping_kid", "text", "The KEK that wraps this object's DEK. Routes the unwrap; holds no key material."]
           - ["created_at", "timestamptz", "Row creation."]

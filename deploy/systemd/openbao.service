@@ -2,7 +2,7 @@
 #
 # OpenBao holds the KEK. It is the one service that must never run in dev mode
 # on a real host: `-dev` stores everything in memory, uses a fixed root token,
-# and is explicitly not for production (feature smith-gray/deployment-packaging,
+# and is explicitly not for production (feature safekeys/deployment-packaging,
 # contract no-dev-credentials-in-prod).
 #
 # This unit expects an initialised, unsealed-after-restart server. Auto-unseal

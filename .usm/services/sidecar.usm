@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/sidecar
+$id: safekeys/sidecar
 $type: service
 $version: 1
 $last_updated: "2026-09-26"
@@ -8,7 +8,7 @@ summary: >
   tokens, requests data-key unwrap from the key store, injects plaintext into a non-LLM consumer,
   and zeroises. Written in Go, it runs as a separate user from agents with seccomp/AppArmor
   confinement and no shared memory.
-$system: smith-gray/system
+$system: safekeys/system
 name: Sidecar / Resolver
 status: built
 type: worker
@@ -47,7 +47,7 @@ security:
     The socket is 0600 by default, so only the sidecar's own user may connect. Deployment
     names a shared group (SAFEKEYS_SOCKET_GROUP) to widen it to 0660, which is how agent
     processes running as a different user reach the resolver. A world-accessible socket is
-    refused at startup. See smith-gray/deployment-packaging.
+    refused at startup. See safekeys/deployment-packaging.
   os_isolation: >-
     Enforced by the systemd unit in deploy/systemd/safekeys-sidecar.service — NoNewPrivileges,
     a system-call filter, the Protect*/Restrict* families, an empty capability set, and an

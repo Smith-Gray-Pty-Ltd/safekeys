@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/token-revocation
+$id: safekeys/token-revocation
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -8,8 +8,8 @@ summary: |
   jti denylist checked on every resolve provides the kill switch; short TTL bounds the residual
   window for anything already in flight. Later phases add device binding, so a lost hardware
   token is revoked by serial.
-$system: smith-gray/system
-$service: smith-gray/control-plane
+$system: safekeys/system
+$service: safekeys/control-plane
 status: built
 intent: |
   Short TTLs alone leave an unacceptable window when a token is known to be leaked — minutes to
@@ -113,6 +113,6 @@ implementation:
   test_code: pkg/revocation/checker_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/capability-token
-  - smith-gray/audit-logging
-  - smith-gray/hardware-root
+  - safekeys/capability-token
+  - safekeys/audit-logging
+  - safekeys/hardware-root

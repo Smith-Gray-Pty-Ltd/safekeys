@@ -1,6 +1,6 @@
 // Package localpolicy loads and evaluates resolve-time policy in the sidecar.
 //
-// This closes the gap recorded in smith-gray/policy-engine: the control-plane
+// This closes the gap recorded in safekeys/policy-engine: the control-plane
 // engine was built and tested, but the sidecar's resolve-time check was a
 // hardcoded allow, so a token that existed was sufficient regardless of what
 // local policy said.

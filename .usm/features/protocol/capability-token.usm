@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/capability-token
+$id: safekeys/capability-token
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -7,8 +7,8 @@ summary: |
   The capability token is the only secret-bearing artefact an agent reasons about. A short-lived,
   scoped, audience-bound handle that contains zero secret material, it is safe to pass through
   prompts, memory, tool calls, and multi-agent buses where a value is not.
-$system: smith-gray/system
-$service: smith-gray/control-plane
+$system: safekeys/system
+$service: safekeys/control-plane
 status: built
 intent: |
   Agents must be able to define, create, transport, and request use of secrets without ever
@@ -226,7 +226,7 @@ implementation:
   test_code: pkg/protocol/protocol_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/secret-transport
-  - smith-gray/token-revocation
-  - smith-gray/sidecar-resolution
-  - smith-gray/control-plane-db
+  - safekeys/secret-transport
+  - safekeys/token-revocation
+  - safekeys/sidecar-resolution
+  - safekeys/control-plane-db

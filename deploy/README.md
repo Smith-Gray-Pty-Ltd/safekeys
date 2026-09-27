@@ -158,7 +158,7 @@ chmod 0600 /etc/safekeys/secrets/signing-key
 Whoever holds this key can mint tokens. It is the most sensitive material in the
 system, it lives only on the authority host, and the sidecar never receives it —
 the sidecar holds public keys only. HSM or secure-element custody is the Phase 1
-target ([`smith-gray/hardware-root`](../../.usm/features/hardening/hardware-root.usm));
+target ([`safekeys/hardware-root`](../../.usm/features/hardening/hardware-root.usm));
 this file is the explicit, auditable interim.
 
 ### 6. Start
@@ -216,4 +216,4 @@ To roll back, restore the previous digest — no rebuild is required.
 - **A hosted registry push from this repository's default flow.** CI publishes
   images for release tags; local builds need no registry. See
   `.github/workflows/release.yml`.
-- **HSM-backed signing.** Phase 1. See `smith-gray/hardware-root`.
+- **HSM-backed signing.** Phase 1. See `safekeys/hardware-root`.

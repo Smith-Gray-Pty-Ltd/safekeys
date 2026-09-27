@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/integration-mcp-server
+$id: safekeys/integration-mcp-server
 $type: feature
 $version: 1
 $last_updated: "2026-09-25"
@@ -8,8 +8,8 @@ summary: |
   Cursor, Codex, Gemini — through one standard tool bus. It is the highest-leverage MVP
   integration: agents can create and use secrets with no per-vendor SDK, receiving only tokens,
   paths, and status.
-$system: smith-gray/system
-$service: smith-gray/mcp-server
+$system: safekeys/system
+$service: safekeys/mcp-server
 status: built
 intent: |
   Every agent framework integration is a thin adapter on the same contract, so building them one by
@@ -202,6 +202,6 @@ implementation:
   test_code: packages/mcp-server/src/tools/tools.test.ts
   test_code_status: manual
 see_also:
-  - smith-gray/exec-wrapper
-  - smith-gray/integration-python-sdk
-  - smith-gray/sidecar-resolution
+  - safekeys/exec-wrapper
+  - safekeys/integration-python-sdk
+  - safekeys/sidecar-resolution

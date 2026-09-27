@@ -52,7 +52,7 @@ chown root:root *
 
 Whoever holds `signing-key` can mint tokens for any object. It is a bare key on
 disk today because HSM custody is Phase 1
-([`smith-gray/hardware-root`](../../.usm/features/hardening/hardware-root.usm)).
+([`safekeys/hardware-root`](../../.usm/features/hardening/hardware-root.usm)).
 The mitigations in place now:
 
 - It lives only on the authority host — never on a host running agent workloads.

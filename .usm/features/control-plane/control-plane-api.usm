@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/control-plane-api
+$id: safekeys/control-plane-api
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -7,8 +7,8 @@ summary: |
   The Control Plane API is the authority service: it allocates object ids, issues and revokes
   capability tokens, evaluates policy, and exposes the audit log. Sidecars and CLIs authenticate to
   it with an API key in the MVP and mTLS later. It never accepts or stores plaintext.
-$system: smith-gray/system
-$service: smith-gray/control-plane
+$system: safekeys/system
+$service: safekeys/control-plane
 status: built
 intent: |
   Tokens need an issuing authority, policy needs a central place to live and change, and audit needs
@@ -187,6 +187,6 @@ implementation:
   test_code: apps/control-plane/internal/inttest/control_plane_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/capability-token
-  - smith-gray/policy-engine
-  - smith-gray/audit-logging
+  - safekeys/capability-token
+  - safekeys/policy-engine
+  - safekeys/audit-logging

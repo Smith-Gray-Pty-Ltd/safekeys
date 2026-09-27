@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/exec-wrapper
+$id: safekeys/exec-wrapper
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -7,8 +7,8 @@ summary: |
   `safekeys exec --token … -- <command>` runs a command with secrets injected into its environment
   and the ambient environment scrubbed. It is the framework-agnostic integration: any harness that
   can spawn a subprocess works immediately, and the caller receives only an exit code.
-$system: smith-gray/system
-$service: smith-gray/cli
+$system: safekeys/system
+$service: safekeys/cli
 status: built
 intent: |
   The cleanest "the model never sees plaintext" path is the one where the secret never appears in
@@ -105,6 +105,6 @@ implementation:
   test_code: pkg/inject/inject_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/secret-injection
-  - smith-gray/python-sdk
-  - smith-gray/mcp-server
+  - safekeys/secret-injection
+  - safekeys/python-sdk
+  - safekeys/mcp-server

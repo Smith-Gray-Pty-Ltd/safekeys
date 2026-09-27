@@ -1,12 +1,12 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/typescript-sdk
+$id: safekeys/typescript-sdk
 $type: service
 $version: 1
 $last_updated: "2026-09-22"
 summary: |
   TypeScript SDK — the Node-side counterpart to the Python SDK, targeting Mastra, Vercel AI SDK, and OpenAI Agents SDK customers. Identical token-only API surface: accept and return capability tokens and folder paths, never plaintext.
 
-$system: smith-gray/system
+$system: safekeys/system
 name: TypeScript SDK
 status: planned
 type: api

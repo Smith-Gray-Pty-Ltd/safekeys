@@ -617,8 +617,8 @@ func ParseURI(raw string) (ParsedURI, error) {
 // VerifyToken performs the full verification sequence against a parsed URI and
 // returns the claims.
 //
-// Order matters and mirrors the contracts in smith-gray/capability-token and
-// smith-gray/sidecar-resolution: signature and algorithm first, then time
+// Order matters and mirrors the contracts in safekeys/capability-token and
+// safekeys/sidecar-resolution: signature and algorithm first, then time
 // bounds, then audience, then sid/path agreement, then scope. No key-store
 // interaction may occur before this returns nil — that is enforced by the
 // caller performing the unwrap only after VerifyToken succeeds.

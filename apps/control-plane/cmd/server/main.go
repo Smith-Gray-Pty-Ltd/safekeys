@@ -154,7 +154,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 // named by SAFEKEYS_DEV_SIGNING_KEY_FILE, which is the production-shaped path
 // for delivering a root-owned credential).
 // Production: the key is provisioned into an HSM/secure element; only a handle
-// is present here (Phase 1 — see smith-gray/hardware-root).
+// is present here (Phase 1 — see safekeys/hardware-root).
 func loadSigner() (protocol.Signer, error) {
 	seedB64, src, err := credential.FromEnv("SAFEKEYS_DEV_SIGNING_KEY", "SAFEKEYS_DEV_SIGNING_KEY_FILE")
 	if err != nil {

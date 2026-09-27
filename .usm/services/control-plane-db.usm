@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/control-plane-db
+$id: safekeys/control-plane-db
 $type: service
 $version: 1
 $last_updated: "2026-09-26"
@@ -8,7 +8,7 @@ summary: >-
   revocation denylist, policy rules, and the append-only audit log. Stores identifiers, policy, and
   outcomes only: no plaintext, no unwrapped keys. Wrapped DEKs live with the folder; the KEK lives
   in the key store.
-$system: smith-gray/system
+$system: safekeys/system
 name: Control Plane Database
 status: built
 type: database
@@ -106,7 +106,7 @@ project_structure: >
 
   | `folder_id` | `text` NULL | Groups objects into a folder transport unit, when applicable. |
 
-  | `owner_principal` | `text` | Issuing principal for attribution (e.g. `smith-gray/agent-a`). |
+  | `owner_principal` | `text` | Issuing principal for attribution (e.g. `example-org/agent-a`). |
 
   | `content_type` | `text` NULL | Hint mirrored from the manifest. Never used to gate decryption. |
 

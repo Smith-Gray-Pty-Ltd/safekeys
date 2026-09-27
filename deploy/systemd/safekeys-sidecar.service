@@ -1,7 +1,7 @@
 # Safekeys Sidecar / Resolver — systemd unit.
 #
 # This unit is where the architecture's isolation promise becomes enforceable
-# configuration (ADR separate-os-user; feature smith-gray/deployment-packaging,
+# configuration (ADR separate-os-user; feature safekeys/deployment-packaging,
 # contract sidecar-host-isolation). The directives below are not decoration:
 # each one closes a specific avenue by which a compromised agent process on the
 # same host could reach the resolver's memory or syscalls.

@@ -1,7 +1,7 @@
 name: Release images
 
 # Publishes the control-plane and sidecar images so a host runs exactly the
-# artefact that was tested (feature smith-gray/deployment-packaging, contract
+# artefact that was tested (feature safekeys/deployment-packaging, contract
 # reproducible-deploy).
 #
 # Local builds need no registry — `make images` builds from the same Dockerfiles.

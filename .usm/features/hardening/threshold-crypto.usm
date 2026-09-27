@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/threshold-crypto
+$id: safekeys/threshold-crypto
 $type: feature
 $version: 1
 $last_updated: "2026-09-24"
@@ -8,8 +8,8 @@ summary: |
   ephemerally only inside the element for a requested operation, and adds a hybrid classical plus
   ML-KEM-class ratchet on control-plane sessions with remote attestation before unwrap. No single
   compromised component holds enough to reconstruct a key.
-$system: smith-gray/system
-$service: smith-gray/sidecar
+$system: safekeys/system
+$service: safekeys/sidecar
 status: planned
 intent: |
   A hardware root protects a key from a compromised host, but the device itself remains a single
@@ -150,6 +150,6 @@ implementation:
   test_code: ""
   test_code_status: none
 see_also:
-  - smith-gray/hardware-root
-  - smith-gray/envelope-encryption
-  - smith-gray/sidecar-resolution
+  - safekeys/hardware-root
+  - safekeys/envelope-encryption
+  - safekeys/sidecar-resolution

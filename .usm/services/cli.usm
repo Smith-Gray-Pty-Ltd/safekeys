@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/cli
+$id: safekeys/cli
 $type: service
 $version: 1
 $last_updated: "2026-09-26"
@@ -7,7 +7,7 @@ summary: >
   Safekeys CLI — the operator and agent-facing command line (safekeys create, exec, revoke, list).
   It talks to the local sidecar over the Unix socket and to the control plane for token lifecycle,
   never handling plaintext except on the create path where it writes directly to the sidecar.
-$system: smith-gray/system
+$system: safekeys/system
 name: Safekeys CLI
 status: built
 type: api

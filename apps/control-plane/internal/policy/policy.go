@@ -1,7 +1,7 @@
 // Package policy evaluates resolution policy.
 //
 // Policy is evaluated at TWO points, per the feature spec
-// smith-gray/policy-engine:
+// safekeys/policy-engine:
 //
 //  1. at issuance, so an unnecessary token need never exist; and
 //  2. locally at resolve, so a token that exists is still insufficient if

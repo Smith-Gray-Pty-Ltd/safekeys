@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/envelope-encryption
+$id: safekeys/envelope-encryption
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -8,8 +8,8 @@ summary: |
   Each secret is encrypted with a random data encryption key (DEK); the DEK is wrapped by a
   key-encryption key (KEK) held in the key store. The sidecar unwraps a DEK only for the duration of
   a resolve, then zeroises both the DEK and the plaintext.
-$system: smith-gray/system
-$service: smith-gray/sidecar
+$system: safekeys/system
+$service: safekeys/sidecar
 status: built
 intent: |
   Rotating or revoking a master key must not require re-encrypting every secret ever stored, and a
@@ -144,6 +144,6 @@ implementation:
   test_code: pkg/protocol/protocol_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/encrypted-folder
-  - smith-gray/sidecar-resolution
-  - smith-gray/hardware-root
+  - safekeys/encrypted-folder
+  - safekeys/sidecar-resolution
+  - safekeys/hardware-root

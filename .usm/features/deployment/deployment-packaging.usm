@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/deployment-packaging
+$id: safekeys/deployment-packaging
 $type: feature
 $version: 1
 $last_updated: "2026-09-26"
@@ -8,8 +8,8 @@ summary: |
   control plane and sidecar, a production Compose file, and systemd units that carry the OS
   isolation the architecture promises. Production refuses every development shortcut — dev-mode
   OpenBao, a hardcoded root token, an ad-hoc signing seed, and the insecure local keystore.
-$system: smith-gray/system
-$service: smith-gray/system
+$system: safekeys/system
+$service: safekeys/system
 status: built
 intent: |
   The software MVP works end to end, but "works on the author's laptop" and "safe to run on a VPS"
@@ -309,7 +309,7 @@ implementation:
   test_code: scripts/verify-hardening.sh
   test_code_status: manual
 see_also:
-  - smith-gray/sidecar
-  - smith-gray/control-plane
-  - smith-gray/envelope-encryption
-  - smith-gray/hardware-root
+  - safekeys/sidecar
+  - safekeys/control-plane
+  - safekeys/envelope-encryption
+  - safekeys/hardware-root

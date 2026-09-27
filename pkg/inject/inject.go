@@ -38,7 +38,7 @@ var defaultAllowedEnv = []string{"PATH", "HOME", "USER", "SHELL", "LANG", "LC_AL
 // Outcome is what an injection produces.
 //
 // It carries the wrapped command's OUTPUT — its own stdout and stderr — which is
-// streamed back to the caller per smith-gray/exec-wrapper. It never carries the
+// streamed back to the caller per safekeys/exec-wrapper. It never carries the
 // injected secret and never the resolved plaintext: the injector has no field in
 // which a value could travel. (A command that chooses to echo its own secret is
 // the operator's decision and outside this contract.)
@@ -106,7 +106,7 @@ func (in *ExecInjector) Inject(ctx context.Context, method, name string, plainte
 // non-zero. This is NOT a denial: the secret was injected and the command
 // executed; the command itself simply failed. Conflating the two would both
 // mis-audit the event as a security denial and lose the exit code the caller
-// is owed (see smith-gray/exec-wrapper: "Success is communicated by exit
+// is owed (see safekeys/exec-wrapper: "Success is communicated by exit
 // code").
 type ExitError struct{ Code int }
 

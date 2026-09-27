@@ -12,7 +12,7 @@ Safekeys.ai — encrypted transport for secrets through environments, agentic fl
 |-----|-----------|------|------|
 | Safekeys CLI | `apps/cli` | — | Safekeys CLI — the operator and agent-facing command line (safekeys create, exec, revoke, list) |
 | Control Plane API | `apps/control-plane` | 8080 | Control Plane API — issues and revokes capability tokens, manages policy, and exposes the audit log |
-| Safekeys.ai Site | `apps/safekeys` | 3000 | Safekeys |
+| Safekeys.ai Site | `apps/site` | 3000 | Safekeys |
 | Sidecar / Resolver | `apps/sidecar` | — | Sidecar / Resolver — the only component permitted to resolve a capability token |
 
 ## Shared Packages

@@ -14,7 +14,7 @@
       "description": "A minimal well-formed read token. Schema valid, resolvable.",
       "input": {
         "iss": "https://cp.safekeys.ai",
-        "sub": "smith-gray/agent-a",
+        "sub": "example-org/agent-a",
         "sid": "obj_7f3a91c2",
         "scope": ["read"],
         "aud": "env-staging",

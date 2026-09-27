@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/sidecar-resolution
+$id: safekeys/sidecar-resolution
 $type: feature
 $version: 1
 $last_updated: "2026-09-25"
@@ -8,8 +8,8 @@ summary: |
   non-LLM consumer. It happens only in the privileged sidecar: verify the token, unwrap the DEK,
   decrypt the object, inject into the consumer, zeroise. The sidecar is the only component allowed
   to perform it, and it denies by default.
-$system: smith-gray/system
-$service: smith-gray/sidecar
+$system: safekeys/system
+$service: safekeys/sidecar
 status: built
 intent: |
   This is the enforcement point for the whole product. Every other component can be compromised or
@@ -197,7 +197,7 @@ implementation:
   test_code: test/e2e/two_agent_demo_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/capability-token
-  - smith-gray/secret-injection
-  - smith-gray/audit-logging
-  - smith-gray/hardware-root
+  - safekeys/capability-token
+  - safekeys/secret-injection
+  - safekeys/audit-logging
+  - safekeys/hardware-root

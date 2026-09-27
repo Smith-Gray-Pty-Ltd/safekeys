@@ -10,7 +10,7 @@ import (
 )
 
 // The control plane holds the token signing key, so the production profile must
-// refuse an environment-supplied seed (feature smith-gray/deployment-packaging,
+// refuse an environment-supplied seed (feature safekeys/deployment-packaging,
 // contract no-dev-credentials-in-prod). These tests exercise the real binary
 // because a guard that is not wired in is no guard at all.
 //

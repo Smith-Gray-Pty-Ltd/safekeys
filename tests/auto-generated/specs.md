@@ -2,7 +2,7 @@
 
 Auto-generated from .usm/features/*.usm `tests[]` and `flows[]`.
 
-## smith-gray/audit-logging [built]
+## safekeys/audit-logging [built]
 
 ### From flows:
 
@@ -40,7 +40,7 @@ Auto-generated from .usm/features/*.usm `tests[]` and `flows[]`.
 
 _Spec file: `.usm-workspace/tests/features/audit-logging.spec.ts`_
 
-## smith-gray/control-plane-api [built]
+## safekeys/control-plane-api [built]
 
 ### From flows:
 
@@ -83,7 +83,7 @@ _Spec file: `.usm-workspace/tests/features/audit-logging.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/control-plane-api.spec.ts`_
 
-## smith-gray/policy-engine [built]
+## safekeys/policy-engine [built]
 
 ### From flows:
 
@@ -123,7 +123,7 @@ _Spec file: `.usm-workspace/tests/features/control-plane-api.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
-## smith-gray/deployment-packaging [built]
+## safekeys/deployment-packaging [built]
 
 ### From flows:
 
@@ -194,7 +194,7 @@ _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
 
-## smith-gray/hardware-root [planned]
+## safekeys/hardware-root [planned]
 
 ### From flows:
 
@@ -237,7 +237,7 @@ _Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/hardware-root.spec.ts`_
 
-## smith-gray/threshold-crypto [planned]
+## safekeys/threshold-crypto [planned]
 
 ### From flows:
 
@@ -280,7 +280,7 @@ _Spec file: `.usm-workspace/tests/features/hardware-root.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/threshold-crypto.spec.ts`_
 
-## smith-gray/integration-mcp-server [built]
+## safekeys/integration-mcp-server [built]
 
 ### From flows:
 
@@ -314,7 +314,7 @@ _Spec file: `.usm-workspace/tests/features/threshold-crypto.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/integration-mcp-server.spec.ts`_
 
-## smith-gray/integration-python-sdk [built]
+## safekeys/integration-python-sdk [built]
 
 ### From flows:
 
@@ -353,7 +353,7 @@ _Spec file: `.usm-workspace/tests/features/integration-mcp-server.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/integration-python-sdk.spec.ts`_
 
-## smith-gray/secret-creation [built]
+## safekeys/secret-creation [built]
 
 ### From flows:
 
@@ -391,7 +391,7 @@ _Spec file: `.usm-workspace/tests/features/integration-python-sdk.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/secret-creation.spec.ts`_
 
-## smith-gray/secret-transport [in-progress]
+## safekeys/secret-transport [in-progress]
 
 ### From flows:
 
@@ -430,7 +430,7 @@ _Spec file: `.usm-workspace/tests/features/secret-creation.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/secret-transport.spec.ts`_
 
-## smith-gray/token-revocation [built]
+## safekeys/token-revocation [built]
 
 ### From flows:
 
@@ -464,7 +464,7 @@ _Spec file: `.usm-workspace/tests/features/secret-transport.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/token-revocation.spec.ts`_
 
-## smith-gray/capability-token [built]
+## safekeys/capability-token [built]
 
 ### From flows:
 
@@ -508,7 +508,7 @@ _Spec file: `.usm-workspace/tests/features/token-revocation.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/capability-token.spec.ts`_
 
-## smith-gray/encrypted-folder [built]
+## safekeys/encrypted-folder [built]
 
 ### From flows:
 
@@ -540,7 +540,7 @@ _Spec file: `.usm-workspace/tests/features/capability-token.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/encrypted-folder.spec.ts`_
 
-## smith-gray/envelope-encryption [built]
+## safekeys/envelope-encryption [built]
 
 ### From flows:
 
@@ -578,7 +578,7 @@ _Spec file: `.usm-workspace/tests/features/encrypted-folder.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
 
-## smith-gray/exec-wrapper [built]
+## safekeys/exec-wrapper [built]
 
 ### From flows:
 
@@ -606,7 +606,7 @@ _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/exec-wrapper.spec.ts`_
 
-## smith-gray/secret-injection [in-progress]
+## safekeys/secret-injection [in-progress]
 
 ### From flows:
 
@@ -654,7 +654,7 @@ _Spec file: `.usm-workspace/tests/features/exec-wrapper.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/secret-injection.spec.ts`_
 
-## smith-gray/sidecar-resolution [built]
+## safekeys/sidecar-resolution [built]
 
 ### From flows:
 

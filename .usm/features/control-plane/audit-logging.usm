@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/audit-logging
+$id: safekeys/audit-logging
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -7,8 +7,8 @@ summary: |
   Every resolution is recorded — who, what scope, which jti, which host — without ever logging the
   secret. The audit log is append-only, captures denials as well as successes, and is the evidence
   trail that makes a security review and an incident response possible.
-$system: smith-gray/system
-$service: smith-gray/control-plane
+$system: safekeys/system
+$service: safekeys/control-plane
 status: built
 intent: |
   A system that promises "the model never sees secrets" must be able to prove what happened without
@@ -135,6 +135,6 @@ implementation:
   test_code: apps/control-plane/internal/inttest/control_plane_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/sidecar-resolution
-  - smith-gray/control-plane-api
-  - smith-gray/token-revocation
+  - safekeys/sidecar-resolution
+  - safekeys/control-plane-api
+  - safekeys/token-revocation

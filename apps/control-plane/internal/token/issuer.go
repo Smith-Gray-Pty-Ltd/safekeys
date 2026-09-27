@@ -1,6 +1,6 @@
 // Package token implements capability token issuance and revocation.
 //
-// It implements the feature spec smith-gray/capability-token and the frozen
+// It implements the feature spec safekeys/capability-token and the frozen
 // format in spec/capability-token/. The critical property: a minted token
 // contains zero secret material.
 package token

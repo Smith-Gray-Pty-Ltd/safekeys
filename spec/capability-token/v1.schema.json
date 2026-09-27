@@ -19,7 +19,7 @@
       "minLength": 1,
       "maxLength": 256,
       "description": "Subject — the principal the token was issued to (e.g. an agent identity or operator). Optional but strongly recommended for attribution; when absent, the audit record's requester is the sidecar's local peer identity.",
-      "examples": ["smith-gray/agent-a"]
+      "examples": ["example-org/agent-a"]
     },
     "sid": {
       "type": "string",

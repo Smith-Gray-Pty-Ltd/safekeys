@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/mcp-server
+$id: safekeys/mcp-server
 $type: service
 $version: 1
 $last_updated: "2026-09-26"
@@ -7,7 +7,7 @@ summary: >
   Safekeys MCP Server — the highest-leverage MVP integration. One MCP server exposes Safekeys tools
   to every MCP-capable agent runtime (Claude, Cursor, Codex, Gemini), so agents can create and use
   secrets without per-vendor SDK work. Agents receive only tokens, paths, and status.
-$system: smith-gray/system
+$system: safekeys/system
 name: Safekeys MCP Server
 status: built
 type: api

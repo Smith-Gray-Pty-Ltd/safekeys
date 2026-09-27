@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/policy-engine
+$id: safekeys/policy-engine
 $type: feature
 $version: 1
 $last_updated: "2026-09-25"
@@ -7,8 +7,8 @@ summary: |
   The policy engine decides which sidecar, principal, and process may resolve which object, for
   which scope, into which environment. It runs at token issuance and again as a local check in the
   sidecar, so a token that exists is still not sufficient if local policy forbids the request.
-$system: smith-gray/system
-$service: smith-gray/control-plane
+$system: safekeys/system
+$service: safekeys/control-plane
 status: built
 intent: |
   A valid token proves authority was once granted; it does not prove the request in front of you is
@@ -184,6 +184,6 @@ implementation:
   test_code: pkg/localpolicy/localpolicy_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/control-plane-api
-  - smith-gray/sidecar-resolution
-  - smith-gray/audit-logging
+  - safekeys/control-plane-api
+  - safekeys/sidecar-resolution
+  - safekeys/audit-logging

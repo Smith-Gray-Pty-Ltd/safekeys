@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/python-sdk
+$id: safekeys/python-sdk
 $type: service
 $version: 1
 $last_updated: "2026-09-26"
@@ -7,7 +7,7 @@ summary: >
   Python Agent SDK — a token-only client for agents building secret workflows (LangChain and
   LangGraph tools first). It exposes create_secret and resolve_for_tool, and by construction cannot
   return plaintext to the caller: it only ever returns capability tokens and folder paths.
-$system: smith-gray/system
+$system: safekeys/system
 name: Python SDK
 status: built
 type: api

@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/encrypted-folder
+$id: safekeys/encrypted-folder
 $type: feature
 $version: 1
 $last_updated: "2026-09-22"
@@ -8,8 +8,8 @@ summary: |
   ciphertext blobs, a manifest, and an agent-readable README with no secrets. Folders can be copied,
   synced, or passed between agents freely — copying increases no cryptographic exposure, and only a
   live token plus a reachable sidecar and key authority allow use.
-$system: smith-gray/system
-$service: smith-gray/sidecar
+$system: safekeys/system
+$service: safekeys/sidecar
 status: built
 intent: |
   Secrets need to move the way artefacts move — through git, object stores, artefacts folders, and
@@ -146,7 +146,7 @@ implementation:
   test_code: pkg/protocol/protocol_test.go
   test_code_status: manual
 see_also:
-  - smith-gray/envelope-encryption
-  - smith-gray/secret-transport
-  - smith-gray/capability-token
-  - smith-gray/control-plane-db
+  - safekeys/envelope-encryption
+  - safekeys/secret-transport
+  - safekeys/capability-token
+  - safekeys/control-plane-db

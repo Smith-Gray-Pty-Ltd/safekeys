@@ -11,7 +11,7 @@ import (
 
 // The production profile is a security boundary, not documentation: a host that
 // declares itself production must be unable to start with a development
-// credential path (feature smith-gray/deployment-packaging, contract
+// credential path (feature safekeys/deployment-packaging, contract
 // no-dev-credentials-in-prod). These tests exercise the real binary, because a
 // unit test of the guard would not prove the wiring is present.
 //

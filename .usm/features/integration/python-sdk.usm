@@ -1,5 +1,5 @@
 $schema: https://usm.dev/schema/v1.json
-$id: smith-gray/integration-python-sdk
+$id: safekeys/integration-python-sdk
 $type: feature
 $version: 1
 $last_updated: "2026-09-23"
@@ -8,8 +8,8 @@ summary: |
   LangGraph tools first. `create_secret` and `resolve_for_tool` accept and return only capability
   tokens and folder paths — plaintext is unrepresentable in the API surface, so an agent cannot
   accidentally route a value through model context.
-$system: smith-gray/system
-$service: smith-gray/python-sdk
+$system: safekeys/system
+$service: safekeys/python-sdk
 status: built
 intent: |
   Agent developers will do whatever is easiest, so the safest path has to be the easy path. A SDK
@@ -181,7 +181,7 @@ implementation:
   test_code: packages/sdk-python/tests/test_sdk.py
   test_code_status: manual
 see_also:
-  - smith-gray/secret-creation
-  - smith-gray/sidecar-resolution
-  - smith-gray/mcp-server
-  - smith-gray/exec-wrapper
+  - safekeys/secret-creation
+  - safekeys/sidecar-resolution
+  - safekeys/mcp-server
+  - safekeys/exec-wrapper

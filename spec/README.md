@@ -9,8 +9,8 @@ Specification text lives in [`.usm/`](../.usm); this directory holds the
 
 | Format | Schema | Vectors | Governed by |
 |--------|--------|---------|-------------|
-| Capability token v1 | [`capability-token/v1.schema.json`](capability-token/v1.schema.json) | [`capability-token/v1.vectors.json`](capability-token/v1.vectors.json) | `smith-gray/capability-token` |
-| Encrypted folder manifest v1 | [`encrypted-folder/v1.schema.json`](encrypted-folder/v1.schema.json) | [`encrypted-folder/v1.vectors.json`](encrypted-folder/v1.vectors.json) | `smith-gray/encrypted-folder` |
+| Capability token v1 | [`capability-token/v1.schema.json`](capability-token/v1.schema.json) | [`capability-token/v1.vectors.json`](capability-token/v1.vectors.json) | `safekeys/capability-token` |
+| Encrypted folder manifest v1 | [`encrypted-folder/v1.schema.json`](encrypted-folder/v1.schema.json) | [`encrypted-folder/v1.vectors.json`](encrypted-folder/v1.vectors.json) | `safekeys/encrypted-folder` |
 
 ## Versioning
 
