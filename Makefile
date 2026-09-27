@@ -6,7 +6,7 @@ SHELL := /bin/bash
 GO    ?= go
 BIN   := bin
 
-.PHONY: help build test test-all lint typecheck generate check dev dev-down clean demo mcp-smoke sdk-test images deploy-check verify-hardening
+.PHONY: help build test test-all lint typecheck generate check docs docs-build docs-preview dev dev-down clean demo mcp-smoke sdk-test images deploy-check verify-hardening
 
 help:
 	@echo "Safekeys targets:"
@@ -16,6 +16,9 @@ help:
 	@echo "  make lint         go vet + gofmt check"
 	@echo "  make generate     Regenerate USM docs and agent rules files"
 	@echo "  make check        usm check (spec validity + drift)"
+	@echo "  make docs         Serve the spec docs with live reload (localhost)"
+	@echo "  make docs-build   Build static spec docs HTML"
+	@echo "  make docs-preview Serve the built static docs"
 	@echo "  make dev          Start Postgres/OpenBao, control plane and sidecar"
 	@echo "  make dev-down     Stop the local stack"
 	@echo "  make demo         Run the end-to-end demo against the local stack"
@@ -57,6 +60,26 @@ generate:
 check:
 	usm check
 	usm validate .usm/system.usm
+
+# ── Documentation ────────────────────────────────────────────────────────────
+# USM generates the docs into .usm-workspace/docs (gitignored build output) —
+# there is no committed docs site. Two ways to read them:
+#
+#   make docs          live-reload dev server while editing .usm/ (recommended)
+#   make docs-build    static HTML into .usm-workspace/docs/.vitepress/dist,
+#                      then `make docs-preview` to serve it
+#
+# `usm docs serve` also writes .vitepress/config.mts on first run, which is what
+# makes the pages render at all — serving the directory with bare `vitepress dev`
+# produces an empty shell, because the config does not exist until then.
+docs:
+	usm docs serve --watch
+
+docs-build:
+	usm docs build
+
+docs-preview:
+	@npx vitepress preview .usm-workspace/docs --port 5195
 
 dev:
 	docker compose up -d

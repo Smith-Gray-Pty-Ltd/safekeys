@@ -7,8 +7,10 @@
   "scripts": {
     "usm:validate": "usm validate .usm/**/*.usm",
     "usm:generate": "usm generate",
-    "usm:check": "usm generate --check",
-    "usm:docs": "usm docs serve --watch --auto-port",
+    "usm:drift": "usm generate && git status --porcelain -- AGENTS.md CLAUDE.md 'apps/*/AGENTS.md' '.cursor/rules/*.mdc' '.github/copilot-instructions.md' docs/api/ tests/auto-generated/",
+    "usm:docs": "usm docs serve --watch",
+    "usm:docs:build": "usm docs build",
+    "usm:docs:preview": "npx vitepress preview .usm-workspace/docs --port 5195",
     "usm:query": "usm query"
   },
   "devDependencies": {
