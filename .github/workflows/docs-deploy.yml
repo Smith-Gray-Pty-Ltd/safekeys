@@ -179,20 +179,27 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Passed via the environment, never interpolated into the script.
+          # `${{ ... }}` substitution happens before the shell parses the line,
+          # so a commit message containing a quote or backtick would break the
+          # command apart — and a backtick would execute as a command. An env
+          # var is data, not code, however hostile its contents.
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || 'manual deploy' }}
         run: |
           wrangler pages deploy .usm-workspace/help-docs/.vitepress/dist \
             --project-name=safekeys-docs \
             --branch=main \
             --commit-dirty=true \
-            --commit-message="${{ github.event.head_commit.message || 'manual' }}"
+            --commit-message="$COMMIT_MESSAGE"
 
       - name: Deploy contributor docs → dev-docs.safekeys.ai
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || 'manual deploy' }}
         run: |
           wrangler pages deploy .usm-workspace/docs/.vitepress/dist \
             --project-name=safekeys-dev-docs \
             --branch=main \
             --commit-dirty=true \
-            --commit-message="${{ github.event.head_commit.message || 'manual' }}"
+            --commit-message="$COMMIT_MESSAGE"
