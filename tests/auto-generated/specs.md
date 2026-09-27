@@ -194,6 +194,64 @@ _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
 
+## safekeys/docs-hosting [planned]
+
+### From flows:
+
+- **publish-contributor-docs**: Publish the contributor docs
+  _Build the developer-audience docs and deploy them to dev-docs.safekeys.ai._
+  - validate → `Every .usm spec validates and the drift gate passes, so only a clean tree deploys.`
+  - setup → `The pinned USM version generates both doc sets; the version is the same one CI gates on.`
+  - transform → `The static site is built, then its canonical URLs are corrected to our domain.`
+  - send → `The built directory is uploaded to the dev-docs Pages project.`
+  - observe → `The deploy is recorded with its commit; the previous deployment remains available for rollback.`
+- **publish-help-docs**: Publish the help docs
+  _Build the filtered public-audience docs and deploy them to docs.safekeys.ai._
+  - validate → `The public set is asserted to contain no developer-only pages before anything is uploaded.`
+  - transform → `The help site is built, then its canonical URLs are corrected to our domain.`
+  - send → `The built directory is uploaded to the help-docs Pages project.`
+  - observe → `A failed audience assertion stops the deploy rather than publishing internal notes.`
+- **provision-hosting**: Provision the hosting
+  _The one-time Cloudflare and repository setup a new maintainer must perform._
+  - setup → `Two Pages projects are created, one per audience.`
+  - setup → `Custom domains are attached to each project, with DNS managed by Cloudflare.`
+  - setup → `Two repository secrets grant the workflow upload permission, scoped to Pages only.`
+  - observe → `A missing secret fails the workflow loudly rather than silently skipping the deploy.`
+- **preview-docs-locally**: Preview the docs locally
+  _A maintainer reads both audiences on localhost before publishing._
+  - setup → `The generate target produces both doc sets.`
+  - observe → `The developer audience is served with live reload while specs are edited.`
+  - observe → `The help audience is served separately, so the filter can be inspected before a public deploy.`
+
+### From tests:
+
+- **public-build-excludes-internal-pages** (type: assertion)
+  - setup: audience = help
+  - assert: assertion: no architecture directory exists in the public output
+  - assert: assertion: no design directory exists in the public output
+  - assert: assertion: the assertion fails the job when an internal page is present
+- **sitemap-uses-our-domain** (type: assertion)
+  - setup: artifact = sitemap.xml
+  - assert: assertion: every sitemap location is under safekeys.ai
+  - assert: assertion: no location references a third-party domain
+- **deploy-requires-valid-specs** (type: assertion)
+  - setup: spec_state = one spec edited without regenerating
+  - assert: assertion: the drift gate fails before any upload occurs
+- **missing-secret-fails-loudly** (type: assertion)
+  - setup: secret = absent
+  - assert: assertion: the workflow reports the missing credential
+  - assert: assertion: the deploy does not silently succeed with nothing published
+- **cache-headers-present** (type: assertion)
+  - setup: artifact = _headers
+  - assert: assertion: HTML is configured to revalidate
+  - assert: assertion: hashed assets are configured as immutable
+- **published-site-serves-content** (type: assertion)
+  - setup: url = https://docs.safekeys.ai
+  - assert: assertion: a known feature page returns its content
+  - assert: assertion: the site identifies itself as Safekeys, not another project
+
+_Spec file: `.usm-workspace/tests/features/docs-hosting.spec.ts`_
+
 ## safekeys/hardware-root [planned]
 
 ### From flows:

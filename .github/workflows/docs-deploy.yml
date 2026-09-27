@@ -1,0 +1,191 @@
+name: Deploy docs
+
+# Publishes both documentation audiences to Cloudflare Pages.
+#
+#   docs.safekeys.ai       help docs — the filtered public subset
+#   dev-docs.safekeys.ai   contributor docs — architecture, design, references
+#
+# Implements the feature spec safekeys/docs-hosting. Read that spec before
+# changing this file; the contracts it lists are enforced by the steps below.
+#
+# Deploy is by direct upload rather than Cloudflare's Git integration, so the
+# site is built by the same pinned toolchain CI validates (contract
+# deploy-uses-the-pinned-toolchain). Letting Pages build from the repository
+# would move the generator version into a dashboard, outside version control.
+#
+# One-time setup — see the spec's `provision-hosting` flow:
+#   1. Create the Pages projects `safekeys-docs` and `safekeys-dev-docs`.
+#   2. Attach the custom domains.
+#   3. Add repository secrets CLOUDFLARE_API_TOKEN (Pages:Edit scope only) and
+#      CLOUDFLARE_ACCOUNT_ID.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Documentation is generated from the specs, so a spec change is the
+      # real trigger. Also rerun when this workflow or the generator pin changes.
+      - ".usm/**"
+      - "usmconfig.json"
+      - "package.json"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One deploy at a time. A newer push supersedes a queued one, but never
+  # cancels one mid-upload, which would leave a partially published site.
+  group: docs-deploy
+  cancel-in-progress: false
+
+env:
+  # Must match the pin in ci.yml. Two versions would mean the docs are built by
+  # a generator CI never validated.
+  USM_VERSION: "0.9.0"
+  # The sitemap the generator emits names these domains. See the
+  # correct-canonical-urls-post-build decision in safekeys/docs-hosting.
+  DEV_DOCS_URL: dev-docs.safekeys.ai
+  DOCS_URL: docs.safekeys.ai
+
+jobs:
+  deploy:
+    name: Build and deploy both audiences
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install usm (pinned)
+        run: npm install --global @smithgray/usm@${USM_VERSION}
+
+      - name: Validate specs
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            if ! usm validate "$f"; then fail=1; fi
+          done < <(find .usm -name '*.usm' | sort)
+          exit $fail
+
+      - name: Check specs
+        run: usm check
+
+      # The same gate CI runs: regenerate and ask git whether any committed
+      # generated file changed. A spec edited without regenerating means the
+      # published docs would not match the source of truth, so refuse to deploy.
+      - name: Drift gate
+        run: |
+          usm generate
+          generated_paths=(
+            'AGENTS.md' 'CLAUDE.md' 'apps/*/AGENTS.md'
+            '.cursor/rules/*.mdc' '.github/copilot-instructions.md'
+            'docs/api/' 'tests/auto-generated/'
+          )
+          if [ -n "$(git status --porcelain -- "${generated_paths[@]}")" ]; then
+            echo "::error::Generated files are stale. Run 'make generate' and commit the result."
+            git status --short -- "${generated_paths[@]}"
+            exit 1
+          fi
+          echo "ok — no tracked generated output is stale"
+
+      - name: Generate both doc sets
+        run: make generate
+
+      - name: Build contributor docs
+        run: usm docs build
+
+      - name: Build help docs (public audience)
+        run: usm docs build --audience help
+
+      # Contract audience-separation. The help docs are a *filter* of the
+      # developer docs, and that filter is the only thing keeping internal
+      # architecture notes off a public site. Assert it rather than trusting the
+      # flag: if a developer-only area appears in the public output, fail before
+      # anything is uploaded.
+      - name: Assert the public build excludes internal pages
+        run: |
+          public_dir=.usm-workspace/help-docs/.vitepress/dist
+          fail=0
+          for internal in architecture design data; do
+            if [ -e "$public_dir/$internal" ]; then
+              echo "::error::$internal/ is present in the public help docs build"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "The public build contains contributor-only content. Refusing to deploy."
+            exit 1
+          fi
+          echo "ok — public build contains no developer-only areas"
+
+      # Contract canonical-urls-are-ours. The generator writes a hardcoded
+      # sitemap hostname for both audiences with no override, so a published
+      # site would advertise another project's domain. The build is regenerated
+      # every run, so the correction must be applied every run.
+      - name: Correct the sitemap domains
+        run: |
+          for pair in \
+            ".usm-workspace/docs/.vitepress/dist:$DEV_DOCS_URL" \
+            ".usm-workspace/help-docs/.vitepress/dist:$DOCS_URL"; do
+            dir="${pair%%:*}"; target="${pair##*:}"
+            sitemap="$dir/sitemap.xml"
+            [ -f "$sitemap" ] || continue
+            # Rewrite any *.usm.dev host to ours, whatever the generator chose.
+            sed -i -E "s|https://[a-z-]*\.usm\.dev|https://$target|g" "$sitemap"
+            if grep -qE 'https?://[a-z-]*\.usm\.dev' "$sitemap"; then
+              echo "::error::$sitemap still references a foreign domain after correction"
+              exit 1
+            fi
+            echo "ok — $sitemap points at https://$target"
+          done
+
+      # Contract cache-policy-preserves-freshness. Written after the builds,
+      # because VitePress empties its output directory on each build.
+      - name: Write cache headers
+        run: |
+          for dist in .usm-workspace/docs/.vitepress/dist .usm-workspace/help-docs/.vitepress/dist; do
+            [ -d "$dist" ] || continue
+            printf '/*\n  Cache-Control: public, max-age=0, must-revalidate\n/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n' > "$dist/_headers"
+          done
+
+      # Fail loudly on a missing secret rather than publishing nothing and
+      # reporting success (test missing-secret-fails-loudly).
+      - name: Check credentials are present
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          missing=0
+          [ -n "$CLOUDFLARE_API_TOKEN" ]  || { echo "::error::CLOUDFLARE_API_TOKEN is not set"; missing=1; }
+          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::CLOUDFLARE_ACCOUNT_ID is not set"; missing=1; }
+          exit $missing
+
+      - name: Install wrangler
+        run: npm install -g wrangler@3
+
+      - name: Deploy help docs → docs.safekeys.ai
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler pages deploy .usm-workspace/help-docs/.vitepress/dist \
+            --project-name=safekeys-docs \
+            --branch=main \
+            --commit-dirty=true \
+            --commit-message="${{ github.event.head_commit.message || 'manual' }}"
+
+      - name: Deploy contributor docs → dev-docs.safekeys.ai
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler pages deploy .usm-workspace/docs/.vitepress/dist \
+            --project-name=safekeys-dev-docs \
+            --branch=main \
+            --commit-dirty=true \
+            --commit-message="${{ github.event.head_commit.message || 'manual' }}"

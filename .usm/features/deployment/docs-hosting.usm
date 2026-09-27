@@ -1,0 +1,259 @@
+$schema: https://usm.dev/schema/v1.json
+$id: safekeys/docs-hosting
+$type: feature
+$version: 1
+$last_updated: "2026-09-27"
+summary: >-
+  Publish the generated specification docs to Cloudflare Pages at docs.safekeys.ai and
+  dev-docs.safekeys.ai. Two docs audiences deploy as separate projects so internal architecture
+  stays off the public site, and every deploy is built from the same pinned toolchain that CI
+  validates.
+$system: safekeys/system
+$service: safekeys/site
+intent: >-
+  The specs are the source of truth, but until they are published they only exist on the machine of
+  whoever ran `usm generate`. Hosting closes that gap: contributors get a browsable architecture and
+  feature reference, and prospective users get the public half of it without the internal design
+  notes alongside. The site is the adoption front door for the open core — the protocol is the
+  product, so it has to be readable.
+
+  Doing this on Cloudflare Pages keeps it free, global and dependency-free, and matches how USM
+  itself is hosted, so there is one deploy pattern to understand rather than two. The important
+  constraint is audience separation: the same generator produces both doc sets, and the difference
+  between them is a filter. Getting that filter wrong publishes internal design notes, so the deploy
+  must assert the public set contains no developer-only pages rather than trusting the flag.
+status: planned
+flows:
+  - id: publish-contributor-docs
+    name: Publish the contributor docs
+    description: Build the developer-audience docs and deploy them to dev-docs.safekeys.ai.
+    steps:
+      - id: s1
+        action: validate
+        target: Every .usm spec validates and the drift gate passes, so only a clean tree deploys.
+      - id: s2
+        action: setup
+        target: The pinned USM version generates both doc sets; the version is the same one CI gates on.
+      - id: s3
+        action: transform
+        target: The static site is built, then its canonical URLs are corrected to our domain.
+      - id: s4
+        action: send
+        target: The built directory is uploaded to the dev-docs Pages project.
+      - id: s5
+        action: observe
+        target: >-
+          The deploy is recorded with its commit; the previous deployment remains available for
+          rollback.
+  - id: publish-help-docs
+    name: Publish the help docs
+    description: Build the filtered public-audience docs and deploy them to docs.safekeys.ai.
+    steps:
+      - id: s1
+        action: validate
+        target: The public set is asserted to contain no developer-only pages before anything is uploaded.
+      - id: s2
+        action: transform
+        target: The help site is built, then its canonical URLs are corrected to our domain.
+      - id: s3
+        action: send
+        target: The built directory is uploaded to the help-docs Pages project.
+      - id: s4
+        action: observe
+        target: A failed audience assertion stops the deploy rather than publishing internal notes.
+  - id: provision-hosting
+    name: Provision the hosting
+    description: The one-time Cloudflare and repository setup a new maintainer must perform.
+    steps:
+      - id: s1
+        action: setup
+        target: Two Pages projects are created, one per audience.
+      - id: s2
+        action: setup
+        target: Custom domains are attached to each project, with DNS managed by Cloudflare.
+      - id: s3
+        action: setup
+        target: Two repository secrets grant the workflow upload permission, scoped to Pages only.
+      - id: s4
+        action: observe
+        target: A missing secret fails the workflow loudly rather than silently skipping the deploy.
+  - id: preview-docs-locally
+    name: Preview the docs locally
+    description: A maintainer reads both audiences on localhost before publishing.
+    steps:
+      - id: s1
+        action: setup
+        target: The generate target produces both doc sets.
+      - id: s2
+        action: observe
+        target: The developer audience is served with live reload while specs are edited.
+      - id: s3
+        action: observe
+        target: >-
+          The help audience is served separately, so the filter can be inspected before a public
+          deploy.
+contracts:
+  - id: audience-separation
+    description: The public site must never contain pages intended only for contributors.
+    must_have:
+      - The help docs are a filtered set, not a copy
+      - Architecture, design and data-model pages are absent from the public build
+      - The deploy asserts the filter rather than trusting the flag
+      - A failed assertion blocks publication
+  - id: canonical-urls-are-ours
+    description: Published pages must identify themselves as belonging to safekeys.ai.
+    must_have:
+      - The sitemap references the safekeys.ai domains, never a third party's
+      - No published page advertises another project's canonical URL
+      - The correction is applied on every build, because the generator rewrites it
+  - id: deploy-uses-the-pinned-toolchain
+    description: What is published is what CI validated.
+    must_have:
+      - The deploy job pins the same USM version as CI
+      - The deploy runs only from a passing validation
+      - Generated files are not committed, so the site cannot drift from the specs
+  - id: cache-policy-preserves-freshness
+    description: A redeploy must be visible immediately without losing asset caching.
+    must_have:
+      - HTML responses revalidate rather than being served stale from the edge
+      - Hashed assets are cached immutably
+      - Headers are written after the build, since each build clears the output directory
+  - id: deploy-artifacts-carry-no-secrets
+    description: What is uploaded is content only.
+    must_have:
+      - The upload token exists only in the workflow environment
+      - No credential is embedded in the built site
+      - The token is scoped to Pages deployment, not account-wide
+  - id: rollback-is-possible
+    description: A bad publish can be undone without a rebuild.
+    must_have:
+      - Each deployment is recorded against its commit
+      - A previous deployment can be promoted
+      - The workflow can be run manually for a deliberate republish
+tests:
+  - id: public-build-excludes-internal-pages
+    flow: publish-help-docs
+    setup:
+      audience: help
+    expect:
+      - assertion: no architecture directory exists in the public output
+      - assertion: no design directory exists in the public output
+      - assertion: the assertion fails the job when an internal page is present
+    contracts:
+      - audience-separation
+  - id: sitemap-uses-our-domain
+    flow: publish-contributor-docs
+    setup:
+      artifact: sitemap.xml
+    expect:
+      - assertion: every sitemap location is under safekeys.ai
+      - assertion: no location references a third-party domain
+    contracts:
+      - canonical-urls-are-ours
+  - id: deploy-requires-valid-specs
+    flow: publish-contributor-docs
+    setup:
+      spec_state: one spec edited without regenerating
+    expect:
+      - assertion: the drift gate fails before any upload occurs
+    contracts:
+      - deploy-uses-the-pinned-toolchain
+  - id: missing-secret-fails-loudly
+    flow: provision-hosting
+    setup:
+      secret: absent
+    expect:
+      - assertion: the workflow reports the missing credential
+      - assertion: the deploy does not silently succeed with nothing published
+    contracts:
+      - deploy-artifacts-carry-no-secrets
+  - id: cache-headers-present
+    flow: publish-contributor-docs
+    setup:
+      artifact: _headers
+    expect:
+      - assertion: HTML is configured to revalidate
+      - assertion: hashed assets are configured as immutable
+    contracts:
+      - cache-policy-preserves-freshness
+  - id: published-site-serves-content
+    flow: publish-help-docs
+    setup:
+      url: https://docs.safekeys.ai
+    expect:
+      - assertion: a known feature page returns its content
+      - assertion: the site identifies itself as Safekeys, not another project
+    contracts:
+      - canonical-urls-are-ours
+decisions:
+  - id: cloudflare-pages
+    decision: Host the docs and site on Cloudflare Pages, matching how USM is hosted.
+    rationale: >-
+      The domain is already on the account and DNS is already managed there, so adding a project
+      needs no new provider. Pages is free at this scale, serves globally, and the deploy is a
+      directory upload rather than a platform the project must learn. Using the same shape as USM
+      means one deploy pattern to maintain across both projects.
+    alternatives:
+      - option: GitHub Pages
+        rejected_because: >-
+          The apex domain is already on Cloudflare, so DNS and TLS would be split across two
+          providers for no benefit.
+      - option: A container or VM serving the static site
+        rejected_because: >-
+          Adds an operating system to patch and a cache to configure, for content that is entirely
+          static.
+  - id: two-projects-per-audience
+    decision: Publish the contributor and help docs as two separate Pages projects on separate subdomains.
+    rationale: >-
+      The two audiences differ by exactly one filter, and that filter is the only thing keeping
+      internal architecture notes off the public site. Separate projects make the boundary
+      structural rather than a flag on a build: a mistake in one cannot expose the other, and each
+      can be republished or rolled back independently.
+    alternatives:
+      - option: One project serving both audiences under a path
+        rejected_because: >-
+          The internal pages would sit one directory away from the public ones, so the boundary
+          would rest entirely on the build flag being right.
+  - id: direct-upload-not-git-integration
+    decision: >-
+      Deploy by uploading the built directory from GitHub Actions, rather than connecting Pages to
+      the repository.
+    rationale: >-
+      The site is generated from specs by a pinned toolchain, so the build must happen where that
+      toolchain is pinned. Letting Pages build from the repository would put the generator version
+      outside the repository's control and outside the CI that validates it, which is the specific
+      drift this project already had to fix once.
+    alternatives:
+      - option: Cloudflare Pages Git integration
+        rejected_because: >-
+          Version selection and build steps would move to the provider's dashboard, unversioned and
+          untested.
+  - id: correct-canonical-urls-post-build
+    decision: Rewrite the generated sitemap's domain after each build as a known workaround.
+    rationale: >-
+      The pinned generator writes a hardcoded sitemap hostname for the help and developer audiences
+      with no configuration or environment override, so a published site would claim to belong to
+      another project. Since the build is regenerated every run, the correction has to be applied
+      every run; it is recorded as a workaround with an upstream report rather than treated as
+      intended behaviour.
+    alternatives:
+      - option: Omit the sitemap until the generator allows configuring it
+        rejected_because: Loses discoverability for the whole public site to correct one field.
+      - option: Commit a corrected config file
+        rejected_because: The generator rewrites it on every build, so the fix would not survive.
+  - id: marketing-site-deploys-separately
+    decision: Wire the docs deploy now and add the marketing site when it is built.
+    rationale: >-
+      The docs exist and build today; apps/safekeys is an empty directory. Splitting the workflows
+      keeps the docs publishing unblocked and means the marketing build, which has a different
+      toolchain and output, cannot break documentation deploys.
+    alternatives:
+      - option: Wait and deploy both together
+        rejected_because: Withholds value that is already built, for no technical benefit.
+implementation:
+  primary: ""
+  test_code: ""
+  test_code_status: none
+see_also:
+  - safekeys/site
+  - safekeys/deployment-packaging

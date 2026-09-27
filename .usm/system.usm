@@ -158,25 +158,55 @@ auth_schemes:
     description: Local authenticated channel (Unix domain socket) between an agent/CLI and the sidecar on the same host.
 
 infrastructure:
-  cloud: customer-hosted or hosted control plane
-  region: ""
+  cloud: cloudflare (docs and marketing site); customer-hosted or hosted control plane for the product itself
+  region: global edge
   terraform_ref: ""
   dns: safekeys.ai
-  ssl: managed TLS at the edge
+  ssl: cloudflare-managed
 
 deployment:
   environments:
     - name: dev
       url: http://localhost:8080
       type: local
+      notes: Control plane and sidecar via `make dev`.
+    - name: docs
+      url: https://docs.safekeys.ai
+      type: cloudflare-pages
+      build_command: make generate && usm docs build --audience help
+      output_directory: .usm-workspace/help-docs/.vitepress/dist
+      project_name: safekeys-docs
+      secrets:
+        - CLOUDFLARE_API_TOKEN
+        - CLOUDFLARE_ACCOUNT_ID
+      notes: |
+        Help docs (VitePress, filtered for the public audience). Deployed by
+        .github/workflows/docs-deploy.yml on push to main. Cloudflare Pages — free tier.
+    - name: dev-docs
+      url: https://dev-docs.safekeys.ai
+      type: cloudflare-pages
+      build_command: make generate && usm docs build
+      output_directory: .usm-workspace/docs/.vitepress/dist
+      project_name: safekeys-dev-docs
+      secrets:
+        - CLOUDFLARE_API_TOKEN
+        - CLOUDFLARE_ACCOUNT_ID
+      notes: |
+        Contributor docs (VitePress, developer audience — architecture, design, references).
+        Deployed by .github/workflows/docs-deploy.yml on push to main. Cloudflare Pages — free tier.
     - name: site
       url: https://safekeys.ai
-      type: production
+      type: cloudflare-pages (planned)
+      notes: |
+        Marketing site. apps/safekeys is not built yet; see safekeys/docs-hosting.
   notes: |
     MVP operator footprint: 2–3 small VMs or one small Kubernetes namespace, managed Postgres,
     OpenBao/Vault on a hardened VM, API keys plus mTLS for sidecars. Low hundreds of USD per month
     at early stage. Customer install is a single sidecar binary or container plus a control-plane URL
     and client credential.
+
+    The docs and marketing site are static and hosted on Cloudflare Pages, which is independent of
+    the product's own infrastructure above.
 
 local_development:
   container_runtime: >-
@@ -284,77 +314,77 @@ index:
   - id: protocol-capability-token
     name: Capability Token
     ref: .usm/features/protocol/capability-token.usm
-    status: planned
+    status: built
     tags: [protocol, crypto, token, mvp]
   - id: protocol-encrypted-folder
     name: Encrypted Folder Format
     ref: .usm/features/protocol/encrypted-folder.usm
-    status: planned
+    status: built
     tags: [protocol, crypto, folder, mvp]
   - id: protocol-envelope-encryption
     name: Envelope Encryption
     ref: .usm/features/protocol/envelope-encryption.usm
-    status: planned
+    status: built
     tags: [protocol, crypto, kms, mvp]
   - id: resolution-sidecar
     name: Sidecar Resolution
     ref: .usm/features/resolution/sidecar-resolution.usm
-    status: planned
+    status: built
     tags: [sidecar, mvp, security]
   - id: resolution-injection
     name: Secret Injection Interfaces
     ref: .usm/features/resolution/secret-injection.usm
-    status: planned
+    status: in-progress
     tags: [sidecar, injection, mvp]
   - id: resolution-exec-wrapper
     name: Exec Wrapper
     ref: .usm/features/resolution/exec-wrapper.usm
-    status: planned
+    status: built
     tags: [cli, injection, mvp]
   - id: lifecycle-creation
     name: Secret Creation
     ref: .usm/features/lifecycle/secret-creation.usm
-    status: planned
+    status: built
     tags: [lifecycle, mvp]
   - id: lifecycle-transport
     name: Secret Transport
     ref: .usm/features/lifecycle/secret-transport.usm
-    status: planned
+    status: in-progress
     tags: [lifecycle, mvp, agents]
   - id: lifecycle-revocation
     name: Token Revocation
     ref: .usm/features/lifecycle/token-revocation.usm
-    status: planned
+    status: built
     tags: [lifecycle, security, mvp]
   - id: control-plane-api
     name: Control Plane API
     ref: .usm/features/control-plane/control-plane-api.usm
-    status: planned
+    status: built
     tags: [control-plane, api, mvp]
   - id: control-plane-audit
     name: Audit Logging
     ref: .usm/features/control-plane/audit-logging.usm
-    status: planned
+    status: built
     tags: [control-plane, audit, mvp]
   - id: control-plane-policy
     name: Policy Engine
     ref: .usm/features/control-plane/policy-engine.usm
-    status: planned
+    status: built
     tags: [control-plane, policy, mvp]
   - id: integration-python-sdk
     name: Python Agent SDK
     ref: .usm/features/integration/python-sdk.usm
-    status: planned
+    status: built
     tags: [sdk, mvp, agents]
   - id: integration-mcp-server
     name: MCP Server
     ref: .usm/features/integration/mcp-server.usm
-    status: planned
+    status: built
     tags: [mcp, mvp, agents]
   - id: control-plane-db
     name: Control Plane Data Model
     ref: .usm/services/control-plane-db.usm
-    status: planned
+    status: built
     tags: [data, postgres, mvp]
   - id: hardening-hardware-root
     name: Hardware Root of Trust
@@ -371,6 +401,11 @@ index:
     ref: .usm/features/deployment/deployment-packaging.usm
     status: built
     tags: [deployment, hardening, operations]
+  - id: deployment-docs-hosting
+    name: Docs and Site Hosting
+    ref: .usm/features/deployment/docs-hosting.usm
+    status: planned
+    tags: [deployment, docs, cloudflare]
 
 roadmap:
   - id: phase-0-mvp
