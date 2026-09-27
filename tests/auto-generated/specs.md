@@ -449,7 +449,7 @@ _Spec file: `.usm-workspace/tests/features/integration-python-sdk.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/secret-creation.spec.ts`_
 
-## safekeys/secret-transport [in-progress]
+## safekeys/secret-transport [built]
 
 ### From flows:
 
@@ -664,7 +664,7 @@ _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/exec-wrapper.spec.ts`_
 
-## safekeys/secret-injection [in-progress]
+## safekeys/secret-injection [built]
 
 ### From flows:
 
