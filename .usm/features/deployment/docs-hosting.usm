@@ -22,7 +22,7 @@ intent: >-
   constraint is audience separation: the same generator produces both doc sets, and the difference
   between them is a filter. Getting that filter wrong publishes internal design notes, so the deploy
   must assert the public set contains no developer-only pages rather than trusting the flag.
-status: planned
+status: built
 flows:
   - id: publish-contributor-docs
     name: Publish the contributor docs
@@ -251,7 +251,7 @@ decisions:
       - option: Wait and deploy both together
         rejected_because: Withholds value that is already built, for no technical benefit.
 implementation:
-  primary: ""
+  primary: .github/workflows/docs-deploy.yml
   test_code: ""
   test_code_status: none
 see_also:
