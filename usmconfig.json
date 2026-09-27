@@ -28,7 +28,6 @@
   "data": [],
   "outputs": {
     "usm_source": ".usm/",
-    "help_docs": "docs/help/",
     "openapi": "docs/api/",
     "tests": "tests/auto-generated/",
     "agents_md": "AGENTS.md"

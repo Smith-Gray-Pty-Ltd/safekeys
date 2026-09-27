@@ -6,7 +6,7 @@ SHELL := /bin/bash
 GO    ?= go
 BIN   := bin
 
-.PHONY: help build test test-all lint typecheck generate check docs docs-build docs-preview dev dev-down clean demo mcp-smoke sdk-test images deploy-check verify-hardening
+.PHONY: help build test test-all lint typecheck generate check docs docs-help docs-build docs-preview dev dev-down clean demo mcp-smoke sdk-test images deploy-check verify-hardening
 
 help:
 	@echo "Safekeys targets:"
@@ -16,7 +16,8 @@ help:
 	@echo "  make lint         go vet + gofmt check"
 	@echo "  make generate     Regenerate USM docs and agent rules files"
 	@echo "  make check        usm check (spec validity + drift)"
-	@echo "  make docs         Serve the spec docs with live reload (localhost)"
+	@echo "  make docs         Serve the contributor spec docs with live reload"
+	@echo "  make docs-help    Serve the help (public-facing) docs instead"
 	@echo "  make docs-build   Build static spec docs HTML"
 	@echo "  make docs-preview Serve the built static docs"
 	@echo "  make dev          Start Postgres/OpenBao, control plane and sidecar"
@@ -55,6 +56,7 @@ sdk-test:
 
 generate:
 	usm generate
+	usm generate --only help-docs >/dev/null 2>&1 || true
 	usm generate --only agents-md >/dev/null 2>&1 || true
 
 check:
@@ -62,18 +64,31 @@ check:
 	usm validate .usm/system.usm
 
 # ── Documentation ────────────────────────────────────────────────────────────
-# USM generates the docs into .usm-workspace/docs (gitignored build output) —
-# there is no committed docs site. Two ways to read them:
+# USM produces two doc sets, both into gitignored .usm-workspace build output —
+# there is no committed docs site:
+#
+#   .usm-workspace/docs/       contributor docs (architecture, specs, references)
+#   .usm-workspace/help-docs/  help docs — a filtered public-facing subset
+#
+# `make generate` produces both. To read them:
 #
 #   make docs          live-reload dev server while editing .usm/ (recommended)
-#   make docs-build    static HTML into .usm-workspace/docs/.vitepress/dist,
-#                      then `make docs-preview` to serve it
+#   make docs-help     serve the help (public) audience instead
+#   make docs-build    static HTML, then `make docs-preview` to serve it
+#
+# NOTE: the help docs are currently a *filtered subset* of the developer docs,
+# not true user documentation. USM composes real user docs from personas and
+# journeys, and system.usm declares none yet — so --only help-docs can only
+# filter. Adding personas/journeys is what would make these user-facing.
 #
 # `usm docs serve` also writes .vitepress/config.mts on first run, which is what
 # makes the pages render at all — serving the directory with bare `vitepress dev`
 # produces an empty shell, because the config does not exist until then.
 docs:
 	usm docs serve --watch
+
+docs-help:
+	usm docs serve --watch --audience help
 
 docs-build:
 	usm docs build
