@@ -64,6 +64,13 @@ jobs:
       - name: Install usm (pinned)
         run: npm install --global @smithgray/usm@${USM_VERSION}
 
+      # VitePress is an optional peer of USM: `usm docs build` shells out to it,
+      # so without this the docs step fails with "VitePress is not installed".
+      # ci.yml does not need it because CI only validates specs, never builds
+      # the site.
+      - name: Install VitePress
+        run: npm ci
+
       - name: Validate specs
         run: |
           fail=0
