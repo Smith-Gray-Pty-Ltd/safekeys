@@ -1,0 +1,146 @@
+# Safekeys Sidecar / Resolver — systemd unit.
+#
+# This unit is where the architecture's isolation promise becomes enforceable
+# configuration (ADR separate-os-user; feature smith-gray/deployment-packaging,
+# contract sidecar-host-isolation). The directives below are not decoration:
+# each one closes a specific avenue by which a compromised agent process on the
+# same host could reach the resolver's memory or syscalls.
+#
+# Install:
+#   install -m 0644 deploy/systemd/safekeys-sidecar.service /etc/systemd/system/
+#   systemctl daemon-reload
+#   systemctl enable --now safekeys-sidecar
+#
+# Verify the confinement:
+#   systemd-analyze security safekeys-sidecar
+#
+# Run this on the host that holds the secrets. A containerised sidecar cannot
+# inject into host processes (see Dockerfile.sidecar) — systemd is the reference
+# topology.
+
+[Unit]
+StartLimitIntervalSec=120
+StartLimitBurst=5
+Description=Safekeys Sidecar / Resolver
+Documentation=https://github.com/Smith-Gray-Pty-Ltd/safekeys
+# The sidecar denies everything unless it can reach current authority, so it
+# must start after the control plane is reachable, not merely after the network.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# The resolver binary. Every setting it needs arrives by file or via the
+# Environment= directives above; no credential is passed on the command line.
+ExecStart=/usr/local/bin/safekeys-sidecar
+
+# ── Identity ────────────────────────────────────────────────────────────────
+# A dedicated user, distinct from any agent user, is what makes the boundary
+# real rather than nominal. The supplementary group is the socket's shared
+# group: only members of it may connect (see SAFEKEYS_SOCKET_GROUP below).
+User=safekeys-sidecar
+Group=safekeys-sidecar
+SupplementaryGroups=safekeys-socket
+
+# ── Configuration ───────────────────────────────────────────────────────────
+# No credential appears here. The key-store token and control-plane API key are
+# loaded via LoadCredential below, which delivers them as root-owned 0600 files
+# readable only by this unit — never through the environment, where every child
+# process and /proc/<pid>/environ would expose them.
+Environment=SAFEKEYS_PROFILE=production
+Environment=SAFEKEYS_SOCKET=/run/safekeys/sidecar.sock
+Environment=SAFEKEYS_SOCKET_GROUP=safekeys-socket
+Environment=SAFEKEYS_FOLDER=/var/lib/safekeys/folder
+Environment=SAFEKEYS_AUDIENCE=env-local
+Environment=SAFEKEYS_CONTROL_PLANE_URL=https://cp.safekeys.internal
+Environment=SAFEKEYS_VAULT_ADDR=https://127.0.0.1:8200
+Environment=SAFEKEYS_VAULT_MOUNT=transit
+Environment=SAFEKEYS_VAULT_KID=kek-1
+# Point the process at the credential files systemd materialises. The *_FILE
+# variables are what keep the values out of the environment entirely.
+Environment=SAFEKEYS_VAULT_TOKEN_FILE=%d/vault-token
+Environment=SAFEKEYS_API_KEY_FILE=%d/control-plane-api-key
+# Air-gapped/bootstrapped hosts may instead pin public keys and policy from
+# files rather than fetching them:
+#Environment=SAFEKEYS_VERIFY_KEYS=/etc/safekeys/keys.jwks.json
+#Environment=SAFEKEYS_POLICY_FILE=/etc/safekeys/policy.json
+
+# Credentials are read as root and exposed to the service as files under
+# $CREDENTIALS_DIRECTORY (%d). This is the systemd-native equivalent of a
+# container secret mount.
+LoadCredential=vault-token:/etc/safekeys/secrets/vault-token
+LoadCredential=control-plane-api-key:/etc/safekeys/secrets/control-plane-api-key
+
+# ── Restart ─────────────────────────────────────────────────────────────────
+# The sidecar fails closed when authority is unreachable, so a restart loop is
+# the correct response to a transient outage — but it must not be so eager that
+# a real misconfiguration looks like a flapping service and hides the cause.
+Restart=on-failure
+RestartSec=5s
+
+# ── Filesystem confinement ──────────────────────────────────────────────────
+# The process may bind one socket and read its own folders. Everything else on
+# the filesystem is either read-only or entirely absent from its view.
+RuntimeDirectory=safekeys
+RuntimeDirectoryMode=0755
+StateDirectory=safekeys
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateMounts=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+
+# /run/safekeys is a RuntimeDirectory, so it is writable; /var/lib/safekeys is
+# the StateDirectory. Both are granted explicitly because ProtectSystem=strict
+# makes the rest of the filesystem read-only.
+ReadWritePaths=/run/safekeys /var/lib/safekeys
+
+# ── Capability confinement ─────────────────────────────────────────────────
+# The sidecar needs no capabilities at all: it binds a Unix socket, reads
+# files it owns, and spawns children it already has permission to spawn.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# IPC is deliberately removed: the sidecar must share no memory with any agent
+# process, and a Unix socket is the only channel it needs.
+PrivateIPC=yes
+
+# ── System-call confinement (the seccomp layer) ─────────────────────────────
+# A denylist of the syscalls that are only ever useful for escape, escalation,
+# or introspection. `~` inverts to "deny these"; combined with the filesystem
+# and capability restrictions above, this is the seccomp/AppArmor confinement
+# the architecture specifies.
+SystemCallFilter=~@clock @cpu-emulation @debug @keyring @module @mount @obsolete @privileged @raw-io @reboot @resources @swap @sync
+SystemCallArchitectures=native
+
+# ── Network ─────────────────────────────────────────────────────────────────
+# The sidecar talks to the control plane and key store over TCP (HTTPS to the
+# authority, HTTP to the local key store) and to agents over its Unix socket.
+# AF_INET/AF_INET6 are required for the former; AF_UNIX for the latter. No
+# other address family is useful, and notably AF_NETLINK, AF_PACKET, and
+# AF_VSOCK stay closed.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# ── AppArmor (optional) ─────────────────────────────────────────────────────
+# On hosts with AppArmor, load deploy/apparmor/safekeys-sidecar first, then
+# uncomment. SELinux hosts should use a targeted policy instead.
+#AppArmorProfile=safekeys-sidecar
+
+[Install]
+WantedBy=multi-user.target

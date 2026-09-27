@@ -43,6 +43,15 @@ testing:
 security:
   auth_method: Local authenticated channel; control-plane API key; device identity via mTLS later
   secrets_ref: docs/help/security-model.md
+  socket_access: >-
+    The socket is 0600 by default, so only the sidecar's own user may connect. Deployment
+    names a shared group (SAFEKEYS_SOCKET_GROUP) to widen it to 0660, which is how agent
+    processes running as a different user reach the resolver. A world-accessible socket is
+    refused at startup. See smith-gray/deployment-packaging.
+  os_isolation: >-
+    Enforced by the systemd unit in deploy/systemd/safekeys-sidecar.service — NoNewPrivileges,
+    a system-call filter, the Protect*/Restrict* families, an empty capability set, and an
+    optional AppArmor profile — and asserted with systemd-analyze security.
 modules:
   - name: token-verify
     purpose: Verify token signature, expiry, audience, scope, and jti denylist before any unwrap

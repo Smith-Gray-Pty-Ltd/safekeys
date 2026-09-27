@@ -6,7 +6,7 @@ SHELL := /bin/bash
 GO    ?= go
 BIN   := bin
 
-.PHONY: help build test test-all lint typecheck generate check dev dev-down clean demo mcp-smoke sdk-test
+.PHONY: help build test test-all lint typecheck generate check dev dev-down clean demo mcp-smoke sdk-test images deploy-check verify-hardening
 
 help:
 	@echo "Safekeys targets:"
@@ -21,6 +21,8 @@ help:
 	@echo "  make demo         Run the end-to-end demo against the local stack"
 	@echo "  make mcp-smoke    Drive the MCP server against the local stack"
 	@echo "  make sdk-test     Run the Python SDK tests"
+	@echo "  make images       Build the production container images"
+	@echo "  make deploy-check Validate the production Compose file"
 	@echo "  make clean        Remove build output"
 
 build:
@@ -69,6 +71,30 @@ demo:
 
 mcp-smoke:
 	cd packages/mcp-server && node scripts/mcp-smoke.mjs
+
+# ── Production deployment ────────────────────────────────────────────────────
+# See deploy/README.md. These build and validate the hardened artefacts; they
+# do not touch the development stack.
+
+images:
+	docker build -f Dockerfile.control-plane -t safekeys-control-plane:dev .
+	docker build -f Dockerfile.sidecar       -t safekeys-sidecar:dev .
+	@echo
+	@echo "built safekeys-control-plane:dev and safekeys-sidecar:dev"
+	@echo "pin digests for production with:"
+	@echo "  docker inspect --format='{{index .RepoDigests 0}}' safekeys-control-plane:dev"
+
+# Syntax-check the production Compose file and show the resolved config. The
+# secrets are placeholders at this stage, so a missing file is expected; this
+# proves the file parses and the image references resolve to digests.
+deploy-check:
+	docker compose -f deploy/compose.prod.yml config --quiet && echo "deploy/compose.prod.yml: valid"
+
+# Prove the sidecar unit's systemd confinement still permits the operations the
+# resolver performs (socket bind, fork/exec, file injection). Needs Docker and a
+# Linux systemd image; see scripts/verify-hardening.sh.
+verify-hardening:
+	./scripts/verify-hardening.sh
 
 clean:
 	rm -rf $(BIN) packages/mcp-server/dist .usm-workspace

@@ -52,6 +52,15 @@ venv/
 # Local development state (dev signing key, KEK, ciphertext folders)
 .dev/
 
+# Production deployment secrets. The README is tracked; every credential is not.
+deploy/secrets/*
+!deploy/secrets/README.md
+!deploy/secrets/.gitkeep
+
+# Deployment environment file holding image digests (contains no secrets, but
+# is host-specific).
+deploy/.env
+
 # Go build output
 bin/
 *.test

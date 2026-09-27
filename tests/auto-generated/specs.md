@@ -123,6 +123,77 @@ _Spec file: `.usm-workspace/tests/features/control-plane-api.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
+## smith-gray/deployment-packaging [built]
+
+### From flows:
+
+- **build-images**: Build the service images
+  _Multi-stage Dockerfiles produce minimal, non-root images for the control plane and the sidecar._
+  - setup → `A builder stage compiles a static, CGO-free Go binary for each service; a runtime stage copies only the binary and CA certificates.`
+  - setup → `Each image declares a fixed non-root UID/GID, a read-only-friendly layout, and no shell or package manager in the runtime layer.`
+  - validate → `The build asserts that no image layer contains a signing key, KEK, API key, or secret.`
+  - observe → `Local images are tagged for Compose; CI publishes them for a real host.`
+- **publish-images**: Publish images by digest
+  _CI builds and pushes the images so a host runs exactly what was tested._
+  - send → `CI builds both images from the committed Dockerfiles.`
+  - record → `Images are pushed to a registry and referenced by immutable digest, never a moving tag.`
+  - validate → `The deploy manifest pins the digest, so a pull cannot silently change the artefact.`
+  - observe → `A previous digest can be re-run for rollback without rebuilding.`
+- **deploy-single-vm**: Deploy to a single hardened VM
+  _A reference install on one host — users, directories, secrets, and start order._
+  - setup → `The install creates a dedicated sidecar OS user distinct from any agent user, plus a shared group whose sole purpose is granting access to the sidecar socket.`
+  - setup → `Secrets (control-plane signing seed, API key, OpenBao token) are placed as root-owned 0600 material and delivered to services as systemd credentials or Compose secrets.`
+  - setup → `systemd units start the key store, then the control plane, then the sidecar, with dependency ordering and restart policy expressed in the units themselves.`
+  - validate → `The units carry the confinement directives and pass the asserted hardening threshold.`
+  - observe → `An agent process running as its own user, in the shared group, resolves a token through the socket; no other local user can connect.`
+- **provision-prod-keystore**: Provision a production key store
+  _OpenBao runs as a persistent, sealed-at-rest server — not the in-memory dev server._
+  - setup → `OpenBao is configured for persistent storage with TLS, and a real init produces sealed unseal shares rather than a fixed root token.`
+  - setup → `The transit engine is enabled and the KEK is created; the KEK never leaves the store.`
+  - authenticate → `The control plane and sidecar receive narrowly scoped tokens limited to the transit operations they need, not the root token.`
+  - observe → `A missing or sealed key store denies resolution rather than falling back to a local KEK.`
+- **provision-signing-key**: Provision the token signing key
+  _The Ed25519 signing seed is a root-only credential until HSM custody lands in Phase 1._
+  - setup → `An operator generates an Ed25519 seed and installs it as a root-owned 0600 credential on the control-plane host, never in a shell profile, image layer, or Compose environment block.`
+  - setup → `The unit loads the seed as a systemd credential or Compose secret and exposes it only to the control-plane process.`
+  - validate → `The sidecar never receives the seed; it holds public keys only.`
+  - observe → `HSM or secure-element custody remains the Phase 1 target; this flow is the explicit, auditable holding pattern, not a replacement for it.`
+
+### From tests:
+
+- **images-run-nonroot** (type: assertion)
+  - setup: image = sidecar-and-control-plane
+  - assert: assertion: each container's process runs as a non-root UID
+  - assert: assertion: the runtime image contains no shell or package manager
+- **images-contain-no-secrets** (type: assertion)
+  - setup: scan = image-layers
+  - assert: assertion: no layer contains a signing seed, KEK, API key, or plaintext secret
+- **prod-refuses-dev-credentials** (type: assertion)
+  - setup: profile = production
+  - assert: assertion: startup fails when only the insecure local keystore is configured
+  - assert: assertion: startup fails when a fixed development key store token is supplied
+  - assert: assertion: no production unit references SAFEKEYS_ALLOW_INSECURE_KEYSTORE
+- **sidecar-hardening-asserted** (type: assertion)
+  - setup: command = systemd-analyze security safekeys-sidecar
+  - assert: assertion: the reported exposure level is at or below the pinned threshold
+  - assert: assertion: NoNewPrivileges and the system-call filter are active
+- **socket-not-world-accessible** (type: assertion)
+  - setup: agent_user = safekeys-agent
+  - setup: other_user = someone-else
+  - assert: assertion: the agent user in the sidecar group can connect and resolve
+  - assert: assertion: a user outside the group cannot connect
+  - assert: assertion: the socket mode denies access to unaffiliated local users
+- **boot-fails-closed** (type: assertion)
+  - setup: keystore = unreachable
+  - assert: assertion: the sidecar exits rather than serving a degraded resolution
+  - assert: assertion: systemd restart policy does not mask the failure from monitoring
+- **deploy-pins-digest** (type: assertion)
+  - setup: manifest = deploy/compose.prod.yml
+  - assert: assertion: every image reference is pinned by digest
+  - assert: assertion: no service resolves a moving tag
+
+_Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
+
 ## smith-gray/hardware-root [planned]
 
 ### From flows:

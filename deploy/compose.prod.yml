@@ -1,0 +1,184 @@
+# Safekeys — production Compose file.
+#
+# This is NOT docker-compose.yml. That file is the development stack: it runs
+# OpenBao in dev mode with a fixed root token and sets
+# SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1, which keeps the KEK in a file on disk.
+# Those shortcuts are exactly what this file exists to avoid, so the two are
+# kept separate on purpose (contract no-dev-credentials-in-prod).
+#
+#   Development:  docker compose -f docker-compose.yml up -d
+#   Production:   docker compose -f deploy/compose.prod.yml up -d
+#
+# ── Read deploy/README.md before running this ───────────────────────────────
+#
+# Two topologies are supported, and choosing wrongly produces a resolver that
+# appears to work and then fails at injection:
+#
+#   1. RECOMMENDED — systemd on the host (deploy/systemd/). The sidecar runs on
+#      the host so it can spawn and inject into host consumers. Use this file's
+#      postgres + openbao services and run the sidecar via systemd.
+#
+#   2. ALL-CONTAINER — this file with the sidecar service enabled. Valid only
+#      when the consumer process shares the sidecar's container, because
+#      pkg/inject spawns the consumer as a child of the sidecar. The sidecar
+#      service below is therefore shipped under a `sidecar` profile and off by
+#      default.
+#
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# Every credential is delivered as a file under ./deploy/secrets/, which must be
+# populated before `up` and must never be committed. See deploy/secrets/README.md.
+# The *_FILE variables keep values out of the environment, `docker inspect`, and
+# /proc/<pid>/environ.
+#
+# ── Image pinning ───────────────────────────────────────────────────────────
+# Image references use ${SAFEKEYS_*_IMAGE} variables. Production must set these
+# to an immutable digest (repo@sha256:...), not a tag (contract
+# reproducible-deploy). deploy/.env.example shows the expected form.
+
+name: safekeys-prod
+
+services:
+  postgres:
+    # Pin by digest in production: postgres:16-alpine resolves to
+    # sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    image: ${SAFEKEYS_POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_DB: safekeys
+      POSTGRES_USER: safekeys
+      # The password is read from a file rather than set inline, so it does not
+      # appear in the Compose file, shell history, or `docker inspect`.
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres-password
+    secrets:
+      - postgres-password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safekeys -d safekeys"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    # No published port: only the control plane needs to reach Postgres.
+    expose:
+      - "5432"
+
+  openbao:
+    # Pin by digest in production: openbao/openbao:2.7.0 resolves to
+    # sha256:71156a1c6623a5fa3f5e61b0c6a8ead0faf0df29a778339188443551995d1315
+    image: ${SAFEKEYS_OPENBAO_IMAGE:-openbao/openbao:2.7.0}
+    # A real server with persistent storage — never `server -dev`, and never a
+    # BAO_DEV_ROOT_TOKEN_ID. See deploy/openbao/openbao.hcl.
+    command: ["server", "-config=/etc/openbao/openbao.hcl"]
+    environment:
+      BAO_ADDR: https://0.0.0.0:8200
+    cap_add:
+      # mlock: keeps unseal material and the KEK out of swap.
+      - IPC_LOCK
+    volumes:
+      - ./openbao/openbao.hcl:/etc/openbao/openbao.hcl:ro
+      - bao-data:/var/lib/openbao/data
+      - ./openbao/tls:/etc/openbao/tls:ro
+    healthcheck:
+      # `bao status` exits 0 when unsealed and 2 when sealed — and sealed is the
+      # expected state after a restart until an operator supplies unseal shares.
+      # Both outcomes mean the API is up, so both are healthy.
+      test: ["CMD-SHELL", "BAO_ADDR=https://127.0.0.1:8200 bao status -tls-skip-verify; rc=$$?; [ $$rc -eq 0 ] || [ $$rc -eq 2 ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    expose:
+      - "8200"
+
+  control-plane:
+    image: ${SAFEKEYS_CONTROL_PLANE_IMAGE:-safekeys-control-plane:dev}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      openbao:
+        condition: service_started
+    environment:
+      # Production refuses development credential paths at startup.
+      SAFEKEYS_PROFILE: production
+      SAFEKEYS_ADDR: ":8080"
+      SAFEKEYS_ISSUER: ${SAFEKEYS_ISSUER:?set SAFEKEYS_ISSUER to the https authority URL}
+      SAFEKEYS_KID: ${SAFEKEYS_KID:-prod-key-1}
+      # Credentials as files, not values.
+      DATABASE_URL_FILE: /run/secrets/database-url
+      SAFEKEYS_DEV_SIGNING_KEY_FILE: /run/secrets/signing-key
+      SAFEKEYS_API_KEY_FILE: /run/secrets/control-plane-api-key
+    secrets:
+      - database-url
+      - signing-key
+      - control-plane-api-key
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    expose:
+      - "8080"
+    # Publish only if the sidecar runs on a different host. On a single host the
+    # sidecar reaches it over the compose network by service name.
+    # ports: ["8080:8080"]
+
+  # ── Optional: containerised sidecar ───────────────────────────────────────
+  # Profile-gated because it is only correct when the consuming process lives in
+  # this container. See the topology note at the top of this file.
+  #
+  #   docker compose -f deploy/compose.prod.yml --profile sidecar up -d
+  sidecar:
+    profiles: ["sidecar"]
+    image: ${SAFEKEYS_SIDECAR_IMAGE:-safekeys-sidecar:dev}
+    depends_on:
+      control-plane:
+        condition: service_started
+    environment:
+      SAFEKEYS_PROFILE: production
+      SAFEKEYS_CONTROL_PLANE_URL: http://control-plane:8080
+      SAFEKEYS_VAULT_ADDR: https://openbao:8200
+      SAFEKEYS_VAULT_MOUNT: transit
+      SAFEKEYS_VAULT_KID: ${SAFEKEYS_KID:-prod-key-1}
+      SAFEKEYS_AUDIENCE: ${SAFEKEYS_AUDIENCE:-env-prod}
+      SAFEKEYS_SOCKET: /run/safekeys/sidecar.sock
+      SAFEKEYS_FOLDER: /var/lib/safekeys/folder
+      # The socket must be shared with agent processes, so it is group-owned
+      # rather than owner-only (contract socket-access-model).
+      SAFEKEYS_SOCKET_GROUP: ${SAFEKEYS_SOCKET_GID:-65532}
+      # Credentials as files.
+      SAFEKEYS_VAULT_TOKEN_FILE: /run/secrets/vault-token
+      SAFEKEYS_API_KEY_FILE: /run/secrets/control-plane-api-key
+      # The key store uses a self-signed certificate in a single-VM install.
+      # Set a CA bundle instead in any deployment with real certificates.
+      #BAO_CACERT: /etc/openbao/tls/ca.crt
+    secrets:
+      - vault-token
+      - control-plane-api-key
+    volumes:
+      # The socket lives on a shared volume so agent processes in sibling
+      # containers can connect. The folder holds ciphertext only.
+      - sockets:/run/safekeys
+      - folders:/var/lib/safekeys/folder
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    # A containerised resolver spawns its consumers itself, so it needs no
+    # published port — the socket is its only inbound channel.
+
+secrets:
+  postgres-password:
+    file: ./secrets/postgres-password
+  database-url:
+    file: ./secrets/database-url
+  signing-key:
+    file: ./secrets/signing-key
+  control-plane-api-key:
+    file: ./secrets/control-plane-api-key
+  vault-token:
+    file: ./secrets/vault-token
+
+volumes:
+  pgdata:
+  bao-data:
+  sockets:
+  folders:

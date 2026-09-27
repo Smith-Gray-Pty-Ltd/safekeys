@@ -1,0 +1,154 @@
+name: Release images
+
+# Publishes the control-plane and sidecar images so a host runs exactly the
+# artefact that was tested (feature smith-gray/deployment-packaging, contract
+# reproducible-deploy).
+#
+# Local builds need no registry — `make images` builds from the same Dockerfiles.
+# This workflow exists so production can reference an immutable digest instead of
+# whatever a given host happened to compile.
+#
+# Triggers on a version tag. It does NOT run on every push to main: publishing
+# images is a release act, not a build step, and a moving tag on main would
+# tempt a deployment to track it.
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual run for a deliberate publish outside a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish alongside the digest"
+        required: false
+        default: "manual"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build-and-push:
+    name: Build and push (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: control-plane
+            dockerfile: Dockerfile.control-plane
+          - image: sidecar
+            dockerfile: Dockerfile.sidecar
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}
+          # A semver tag plus the immutable digest. `latest` is deliberately
+          # omitted so nothing can be tempted to deploy a moving tag.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+          labels: |
+            org.opencontainers.image.title=Safekeys ${{ matrix.image }}
+            org.opencontainers.image.description=Encrypted secret transport; plaintext never reaches a model
+            org.opencontainers.image.licenses=Apache-2.0
+
+      # Build once and load, so the image can be scanned before it is published.
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Security gate ──────────────────────────────────────────────────────
+      # The contracts require that no image layer contains a signing key, KEK,
+      # API key, or secret. Fail the release rather than publish.
+      - name: Scan for vulnerabilities and embedded secrets
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          # Fail on any secret finding; fail on high/critical CVEs.
+          severity: HIGH,CRITICAL
+          scanners: vuln,secret
+
+      # Assert the runtime image carries no shell or package manager
+      # (test images-run-nonroot). Distroless/static has neither.
+      - name: Assert no shell in the runtime image
+        run: |
+          img="${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}"
+          if docker run --rm --entrypoint /bin/sh "$img" -c true 2>/dev/null; then
+            echo "::error::runtime image contains /bin/sh; the distroless base was not used"
+            exit 1
+          fi
+          if docker run --rm --entrypoint /bin/bash "$img" -c true 2>/dev/null; then
+            echo "::error::runtime image contains /bin/bash"
+            exit 1
+          fi
+          echo "ok — no shell present"
+
+      - name: Assert the container runs as non-root
+        run: |
+          img="${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}"
+          uid=$(docker image inspect "$img" --format '{{.Config.User}}')
+          echo "configured user: ${uid:-<unset>}"
+          case "$uid" in
+            ""|"0"|"0:0"|"root"|"root:root")
+              echo "::error::image is configured to run as root"
+              exit 1
+              ;;
+          esac
+          echo "ok — runs as $uid"
+
+      - name: Push
+        uses: docker/build-push-action@v6
+        id: push
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+      # The value an operator pins in deploy/.env. Printed so the digest is in
+      # the release log next to the tag it corresponds to.
+      - name: Record digest
+        run: |
+          echo "### Safekeys ${{ matrix.image }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin this in deploy/.env:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}@${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

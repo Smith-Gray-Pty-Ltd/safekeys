@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+#
+# Safekeys Control Plane — the authority service.
+#
+# Multi-stage so the runtime image holds a single static binary and nothing
+# else: no shell, no package manager, no Go toolchain. That keeps the attack
+# surface minimal and makes the "no layer contains a secret" contract auditable
+# — there is nowhere for one to be hidden.
+#
+# Build:
+#   docker build -f Dockerfile.control-plane -t safekeys-control-plane .
+#
+# The runtime is distroless/static: the binary is CGO-free, so it needs no libc.
+# The control plane never accepts or returns plaintext; it holds the token
+# signing key, so it belongs on the authority host, not the sidecar host.
+
+# ── Build ────────────────────────────────────────────────────────────────────
+# Pinned by digest rather than by tag: a tag can be repointed, a digest cannot,
+# which is what makes the image reproducible (contract reproducible-deploy).
+FROM golang:1.26-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
+
+WORKDIR /src
+
+# Dependencies first so a source-only change does not re-download modules.
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# CGO off yields a static binary (verified: `go build` produces a static
+# executable with CGO_ENABLED=0). Trimpath keeps paths out of the binary.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags="-s -w" \
+      -o /out/safekeys-cp ./apps/control-plane/cmd/server
+
+# The build asserts the binary needs no dynamic loader. A CGO-tainted build
+# would fail here rather than in production.
+RUN if command -v file >/dev/null 2>&1; then file /out/safekeys-cp; fi
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+# distroless/static carries CA certificates and tzdata and nothing else — no
+# shell, so `docker exec ... sh` is impossible by construction.
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+# The distroless :nonroot tag already runs as uid 65532. Stating it keeps the
+# intent explicit and lets a deployment assert it (test images-run-nonroot).
+USER 65532:65532
+
+COPY --from=build /out/safekeys-cp /usr/local/bin/safekeys-cp
+
+# Default listen address; a deployment overrides it. No credential defaults are
+# provided on purpose — a missing one must fail the start, not fall back.
+ENV SAFEKEYS_ADDR=:8080
+
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/safekeys-cp"]

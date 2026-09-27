@@ -88,6 +88,44 @@ echo -n 'sk-live-abc123' | ./bin/safekeys create --object obj_demo
 The full walkthrough, including the revoke → denied lifecycle, is in
 [`docs/quickstart.md`](docs/quickstart.md).
 
+## Deploying to a real host
+
+`make dev` is the development stack. It runs OpenBao in dev mode and keeps the
+KEK in a local file — fine on a laptop, not acceptable on a host holding real
+secrets. Deployment is a separate, hardened path in [`deploy/`](deploy/):
+
+```bash
+make images            # build the production container images
+make deploy-check      # validate the production Compose file
+make verify-hardening  # prove the systemd confinement still permits the workload
+```
+
+The reference topology is **systemd on the host**, because the sidecar's job is
+to inject a secret into a consumer process it spawns itself — a containerised
+sidecar cannot reach a host process. `deploy/` ships:
+
+| Artefact | Purpose |
+|----------|---------|
+| `Dockerfile.control-plane`, `Dockerfile.sidecar` | Static, non-root, shell-free images (~17–22MB) |
+| `deploy/systemd/` | Units carrying the OS isolation (seccomp filter, Protect\*, no capabilities) |
+| `deploy/openbao/openbao.hcl` | Persistent, TLS, sealed-at-rest key store — never `-dev` |
+| `deploy/apparmor/` | Optional mandatory-access-control profile for the sidecar |
+| `deploy/compose.prod.yml` | Production Compose, with digest-pinned images |
+
+Two safeguards make the hardened path hard to get wrong:
+
+- **The production profile refuses every development shortcut.** Set
+  `SAFEKEYS_PROFILE=production` and the binaries refuse an env-var signing seed,
+  a dev key-store token, the insecure local keystore, and offline revocation —
+  before they contact anything.
+- **No credential goes through the environment.** Every secret is mounted as a
+  file (`*_FILE` variables), so values never appear in `/proc/<pid>/environ`,
+  `docker inspect`, or the environment of the consumer processes the sidecar
+  spawns. The credential loader refuses a world-readable file outright.
+
+Full operator instructions, in provisioning order, are in
+[`deploy/README.md`](deploy/README.md).
+
 ## Testing it in opencode
 
 Safekeys ships an MCP server, so opencode (or Claude, Cursor, Codex, Gemini) can
@@ -210,10 +248,13 @@ pkg/
   inject/          Go — env, file, exec injection adapters
   created/         Go — the secret-creation path (plaintext never leaves it)
   keystore/        Go — Vault/OpenBao Transit + a development-only local store
+  credential/      Go — file-first credential loading (*_FILE), env fallback
+  profile/         Go — the production profile that refuses dev-only settings
   revocation/      Go — denylist checks against the control plane
   sidecar/         Go — the Unix socket server and client
   folder/          Go — ciphertext folder source
   cpclient/        Go — control-plane HTTP client (used by the sidecar only)
+deploy/            Hardened production packaging: units, Compose, OpenBao, AppArmor
 spec/              Frozen JSON Schemas + language-neutral conformance vectors
 test/e2e/          The two-agent demo
 ```

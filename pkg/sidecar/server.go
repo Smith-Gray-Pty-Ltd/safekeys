@@ -12,7 +12,9 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -95,15 +97,28 @@ type CreatedInfo struct {
 // Config holds the sidecar's dependencies.
 type Config struct {
 	SocketPath string
-	Audience   string
-	Verifier   resolve.Verifier
-	Revoked    resolve.RevocationChecker
-	Policy     resolve.PolicyChecker
-	Source     resolve.ManifestSource
-	Unwrap     func(ctx context.Context, kid, wrapped string) ([]byte, error)
-	Auditor    resolve.Auditor
-	HostName   string
-	Injector   *inject.ExecInjector
+	// SocketGroup, when set, is the name (or numeric GID) of a shared group
+	// granted connect access to the socket, and SocketMode is then applied
+	// instead of the private 0600 default.
+	//
+	// This is how a deployment reconciles two decisions that otherwise
+	// contradict each other: the sidecar runs as its own OS user (ADR
+	// separate-os-user), yet agents must reach the socket. A dedicated group
+	// holding only agent users restores least privilege — those users may
+	// connect, nothing else local may. With no group configured the socket
+	// stays 0600 and only the sidecar's own user can connect, which is the
+	// single-user development arrangement.
+	SocketGroup string
+	SocketMode  os.FileMode
+	Audience    string
+	Verifier    resolve.Verifier
+	Revoked     resolve.RevocationChecker
+	Policy      resolve.PolicyChecker
+	Source      resolve.ManifestSource
+	Unwrap      func(ctx context.Context, kid, wrapped string) ([]byte, error)
+	Auditor     resolve.Auditor
+	HostName    string
+	Injector    *inject.ExecInjector
 	// Creator handles op=create. When nil, create requests are refused.
 	Creator *created.Creator
 	// Registry handles op=list/op=revoke. Keeping these on the SIDECAR rather
@@ -111,6 +126,14 @@ type Config struct {
 	// control-plane credential at all.
 	Registry Registry
 }
+
+// defaultSocketMode is the socket mode when no shared group is configured:
+// owner-only. A caller wanting group access must name the group explicitly.
+const defaultSocketMode os.FileMode = 0o600
+
+// groupSocketMode is the socket mode applied when a shared group is configured:
+// owner and group read/write, no access for anyone else. Never world-accessible.
+const groupSocketMode os.FileMode = 0o660
 
 // Registry is the subset of control-plane operations the sidecar proxies for
 // agent-adjacent callers: metadata listing and revocation. Neither involves a
@@ -167,10 +190,12 @@ func New(cfg Config) *Server {
 
 // Listen binds the Unix socket, removing a stale socket file first.
 //
-// The socket is 0600 so only the sidecar's own user may connect. Agents run as
-// a different user, which is what makes the boundary real (ADR
-// separate-os-user); the CLI runs as that user and is granted access by group
-// or an explicit chown in deployment.
+// Without a configured shared group the socket is 0600, so only the sidecar's
+// own user may connect. With one (SocketGroup) it is 0660 owned by the sidecar
+// user and that group, so agent processes running as a different user can
+// connect while no other local user can (ADR separate-os-user). A
+// world-accessible socket is refused outright: it would hand token resolution
+// to every process on the host.
 func (s *Server) Listen() error {
 	path := s.cfg.SocketPath
 	if path == "" {
@@ -191,12 +216,69 @@ func (s *Server) Listen() error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+
+	mode := s.cfg.SocketMode
+	if mode == 0 {
+		mode = defaultSocketMode
+		if s.cfg.SocketGroup != "" {
+			mode = groupSocketMode
+		}
+	}
+	// Refuse a world-accessible socket before creating it with one. Checking the
+	// configured mode rather than the resulting file is enough because nothing
+	// else widens it afterwards.
+	if mode&0o007 != 0 {
 		ln.Close()
+		os.Remove(path)
+		return fmt.Errorf("sidecar: refusing socket mode %#o — the socket must not be world-accessible", mode)
+	}
+
+	// Apply the group before the mode, so there is no window in which the group
+	// has access but the owner does not (or vice versa).
+	if s.cfg.SocketGroup != "" {
+		gid, gerr := lookupGID(s.cfg.SocketGroup)
+		if gerr != nil {
+			ln.Close()
+			os.Remove(path)
+			return fmt.Errorf("sidecar: socket group %q: %w", s.cfg.SocketGroup, gerr)
+		}
+		if cerr := os.Chown(path, -1, gid); cerr != nil {
+			ln.Close()
+			os.Remove(path)
+			return fmt.Errorf("sidecar: chgrp socket to %q (gid %d): %w", s.cfg.SocketGroup, gid, cerr)
+		}
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		ln.Close()
+		os.Remove(path)
 		return err
 	}
 	s.ln = ln
 	return nil
+}
+
+// lookupGID resolves a group name or a numeric GID string. Accepting either
+// keeps the unit usable when the group is provisioned by GID rather than name
+// (for example from a base image's /etc/group).
+func lookupGID(group string) (int, error) {
+	if group == "" {
+		return -1, fmt.Errorf("empty group")
+	}
+	if gid, err := strconv.Atoi(group); err == nil {
+		if gid < 0 {
+			return -1, fmt.Errorf("negative gid %d", gid)
+		}
+		return gid, nil
+	}
+	g, err := user.LookupGroup(group)
+	if err != nil {
+		return -1, err
+	}
+	gid, err := strconv.Atoi(g.Gid)
+	if err != nil {
+		return -1, fmt.Errorf("group %q has non-numeric gid %q", group, g.Gid)
+	}
+	return gid, nil
 }
 
 // Addr returns the listening socket path.

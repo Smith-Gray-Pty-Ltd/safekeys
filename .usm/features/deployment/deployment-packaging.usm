@@ -1,0 +1,315 @@
+$schema: https://usm.dev/schema/v1.json
+$id: smith-gray/deployment-packaging
+$type: feature
+$version: 1
+$last_updated: "2026-09-26"
+summary: |
+  Reproducible, hardened packaging so Safekeys can run on a real host: container images for the
+  control plane and sidecar, a production Compose file, and systemd units that carry the OS
+  isolation the architecture promises. Production refuses every development shortcut — dev-mode
+  OpenBao, a hardcoded root token, an ad-hoc signing seed, and the insecure local keystore.
+$system: smith-gray/system
+$service: smith-gray/system
+status: built
+intent: |
+  The software MVP works end to end, but "works on the author's laptop" and "safe to run on a VPS"
+  are different claims. Deployment packaging closes the gap without touching the agent-facing
+  protocol: the token and folder formats do not change, only how the authority and the sidecar are
+  built, confined, and started. It is also where the architecture's process-isolation promise stops
+  being prose and becomes enforceable configuration — the sidecar's separate OS user, seccomp-style
+  system-call filtering, and AppArmor confinement land here, not in application code.
+
+  The guiding rule is deny-by-default applied to operations: a production unit must be unable to
+  select a development key path even by accident, and a hardening regression must fail a test
+  rather than pass silently.
+flows:
+  - id: build-images
+    name: Build the service images
+    description: Multi-stage Dockerfiles produce minimal, non-root images for the control plane and the sidecar.
+    steps:
+      - id: s1
+        action: setup
+        target: >-
+          A builder stage compiles a static, CGO-free Go binary for each service; a runtime stage
+          copies only the binary and CA certificates.
+      - id: s2
+        action: setup
+        target: >-
+          Each image declares a fixed non-root UID/GID, a read-only-friendly layout, and no shell
+          or package manager in the runtime layer.
+      - id: s3
+        action: validate
+        target: The build asserts that no image layer contains a signing key, KEK, API key, or secret.
+      - id: s4
+        action: observe
+        target: Local images are tagged for Compose; CI publishes them for a real host.
+  - id: publish-images
+    name: Publish images by digest
+    description: CI builds and pushes the images so a host runs exactly what was tested.
+    steps:
+      - id: s1
+        action: send
+        target: CI builds both images from the committed Dockerfiles.
+      - id: s2
+        action: record
+        target: Images are pushed to a registry and referenced by immutable digest, never a moving tag.
+      - id: s3
+        action: validate
+        target: The deploy manifest pins the digest, so a pull cannot silently change the artefact.
+      - id: s4
+        action: observe
+        target: A previous digest can be re-run for rollback without rebuilding.
+  - id: deploy-single-vm
+    name: Deploy to a single hardened VM
+    description: A reference install on one host — users, directories, secrets, and start order.
+    steps:
+      - id: s1
+        action: setup
+        target: >-
+          The install creates a dedicated sidecar OS user distinct from any agent user, plus a
+          shared group whose sole purpose is granting access to the sidecar socket.
+      - id: s2
+        action: setup
+        target: >-
+          Secrets (control-plane signing seed, API key, OpenBao token) are placed as root-owned
+          0600 material and delivered to services as systemd credentials or Compose secrets.
+      - id: s3
+        action: setup
+        target: >-
+          systemd units start the key store, then the control plane, then the sidecar, with
+          dependency ordering and restart policy expressed in the units themselves.
+      - id: s4
+        action: validate
+        target: The units carry the confinement directives and pass the asserted hardening threshold.
+      - id: s5
+        action: observe
+        target: >-
+          An agent process running as its own user, in the shared group, resolves a token through
+          the socket; no other local user can connect.
+  - id: provision-prod-keystore
+    name: Provision a production key store
+    description: OpenBao runs as a persistent, sealed-at-rest server — not the in-memory dev server.
+    steps:
+      - id: s1
+        action: setup
+        target: >-
+          OpenBao is configured for persistent storage with TLS, and a real init produces sealed
+          unseal shares rather than a fixed root token.
+      - id: s2
+        action: setup
+        target: The transit engine is enabled and the KEK is created; the KEK never leaves the store.
+      - id: s3
+        action: authenticate
+        target: >-
+          The control plane and sidecar receive narrowly scoped tokens limited to the transit
+          operations they need, not the root token.
+      - id: s4
+        action: observe
+        target: A missing or sealed key store denies resolution rather than falling back to a local KEK.
+  - id: provision-signing-key
+    name: Provision the token signing key
+    description: The Ed25519 signing seed is a root-only credential until HSM custody lands in Phase 1.
+    steps:
+      - id: s1
+        action: setup
+        target: >-
+          An operator generates an Ed25519 seed and installs it as a root-owned 0600 credential on
+          the control-plane host, never in a shell profile, image layer, or Compose environment block.
+      - id: s2
+        action: setup
+        target: The unit loads the seed as a systemd credential or Compose secret and exposes it only to the control-plane process.
+      - id: s3
+        action: validate
+        target: The sidecar never receives the seed; it holds public keys only.
+      - id: s4
+        action: observe
+        target: >-
+          HSM or secure-element custody remains the Phase 1 target; this flow is the explicit,
+          auditable holding pattern, not a replacement for it.
+contracts:
+  - id: no-dev-credentials-in-prod
+    description: Production artifacts must be unable to select a development credential path.
+    must_have:
+      - Production uses a persistent OpenBao server, never `server -dev`, and never a fixed root token
+      - The signing seed is delivered from root-owned secret material, not a shell export or the dev key file
+      - No production artifact sets SAFEKEYS_ALLOW_INSECURE_KEYSTORE or SAFEKEYS_REVOCATION_OFFLINE
+      - The development Compose file is not a supported production artefact
+  - id: least-privilege-containers
+    description: Each image runs with the minimum privilege it needs and nothing more.
+    must_have:
+      - Both services run as a fixed non-root UID/GID
+      - The runtime image contains no shell, package manager, or build toolchain
+      - No image layer contains a signing key, KEK, API key, or plaintext secret
+      - Containers drop all Linux capabilities except those a service genuinely requires
+      - The sidecar's root filesystem is read-only apart from its socket and folder directories
+  - id: sidecar-host-isolation
+    description: The OS-level confinement the architecture promises is enforced by the unit and asserted by a test.
+    must_have:
+      - The sidecar runs as an OS user distinct from any agent user
+      - The unit sets NoNewPrivileges, a system-call filter, and the Protect* / Restrict* families
+      - The sidecar shares no memory with agent processes (private tmp, no shared dev/shm, IPC removed)
+      - An AppArmor profile or SELinux type confines the binary on hosts that support one
+      - A hardening regression fails `systemd-analyze security` against a pinned exposure threshold
+  - id: socket-access-model
+    description: The socket is reachable by agents running as a distinct user, and by no one else.
+    must_have:
+      - The socket is owned by the sidecar user and a dedicated shared group
+      - Socket mode grants the group access and denies all others; a world-accessible socket is a failure
+      - A process not in the group cannot connect, even as a local user
+      - The access model is consistent with the separate-user decision rather than contradicting it
+  - id: fail-closed-on-boot
+    description: A production start that cannot verify authority must not serve.
+    must_have:
+      - The sidecar refuses to start when it cannot load public keys or resolve-time policy
+      - The sidecar refuses to start when the configured key store is unreachable or sealed
+      - Services declare dependencies and restart policy so ordering is enforced, not assumed
+      - Deny-by-default policy is retained; production exposes no offline or cached-allow fallback
+  - id: reproducible-deploy
+    description: A host runs exactly the artefact that was tested.
+    must_have:
+      - Images are referenced by immutable digest, never by a moving tag such as latest
+      - The build is reproducible from the committed Dockerfiles and pinned base images
+      - A rollback to a prior digest requires no rebuild
+      - The deploy inputs (units, Compose file, config) are version-controlled
+tests:
+  - id: images-run-nonroot
+    flow: build-images
+    setup:
+      image: sidecar-and-control-plane
+    expect:
+      - assertion: each container's process runs as a non-root UID
+      - assertion: the runtime image contains no shell or package manager
+    contracts:
+      - least-privilege-containers
+  - id: images-contain-no-secrets
+    flow: build-images
+    setup:
+      scan: image-layers
+    expect:
+      - assertion: no layer contains a signing seed, KEK, API key, or plaintext secret
+    contracts:
+      - least-privilege-containers
+      - no-dev-credentials-in-prod
+  - id: prod-refuses-dev-credentials
+    flow: provision-prod-keystore
+    setup:
+      profile: production
+    expect:
+      - assertion: startup fails when only the insecure local keystore is configured
+      - assertion: startup fails when a fixed development key store token is supplied
+      - assertion: no production unit references SAFEKEYS_ALLOW_INSECURE_KEYSTORE
+    contracts:
+      - no-dev-credentials-in-prod
+  - id: sidecar-hardening-asserted
+    flow: deploy-single-vm
+    setup:
+      command: systemd-analyze security safekeys-sidecar
+    expect:
+      - assertion: the reported exposure level is at or below the pinned threshold
+      - assertion: NoNewPrivileges and the system-call filter are active
+    contracts:
+      - sidecar-host-isolation
+  - id: socket-not-world-accessible
+    flow: deploy-single-vm
+    setup:
+      agent_user: safekeys-agent
+      other_user: someone-else
+    expect:
+      - assertion: the agent user in the sidecar group can connect and resolve
+      - assertion: a user outside the group cannot connect
+      - assertion: the socket mode denies access to unaffiliated local users
+    contracts:
+      - socket-access-model
+  - id: boot-fails-closed
+    flow: deploy-single-vm
+    setup:
+      keystore: unreachable
+    expect:
+      - assertion: the sidecar exits rather than serving a degraded resolution
+      - assertion: systemd restart policy does not mask the failure from monitoring
+    contracts:
+      - fail-closed-on-boot
+  - id: deploy-pins-digest
+    flow: publish-images
+    setup:
+      manifest: deploy/compose.prod.yml
+    expect:
+      - assertion: every image reference is pinned by digest
+      - assertion: no service resolves a moving tag
+    contracts:
+      - reproducible-deploy
+decisions:
+  - id: systemd-single-vm-first
+    decision: >-
+      Ship systemd units plus a production Compose file targeting a single hardened VM as the
+      reference deployment; defer Kubernetes manifests.
+    rationale: >-
+      The system map's own footprint is "2–3 small VMs or one small Kubernetes namespace", and the
+      sidecar's trust boundary is the host, which systemd expresses directly. Adding a cluster
+      orchestrator early would multiply configuration surface without adding a security property,
+      and the agent-facing interface is unaffected either way, so Kubernetes can land later behind
+      the same images and units.
+    alternatives:
+      - option: Kubernetes manifests now
+        rejected_because: >-
+          No cluster exists to justify them, and network policies and pod security contexts would
+          duplicate the host-level confinement that is the actual isolation mechanism.
+    status: accepted
+  - id: os-isolation-via-systemd
+    decision: >-
+      Fold the sidecar's OS isolation into the systemd unit's hardening directives, with an AppArmor
+      profile where the host supports it, rather than deferring it as separate work.
+    rationale: >-
+      The system map already specifies seccomp/AppArmor confinement and a separate user; the unit is
+      exactly where those are expressed and where they can be asserted by a test. Leaving it out
+      would ship a deployment whose stated guarantee the artifact does not enforce.
+    status: accepted
+  - id: socket-shared-group
+    decision: >-
+      Change the sidecar socket from 0600 to group-access (sidecar user plus a dedicated shared
+      group, group-only mode) so agent processes running as a distinct user can connect.
+    rationale: >-
+      The separate-os-user decision requires agents to be a different user from the sidecar, but a
+      0600 socket is reachable only by the sidecar's own user — the two are contradictory, and today
+      it works only because development runs everything as one account. A narrow shared group
+      restores the intended least privilege: agents may connect, nothing else local may. This
+      refines the separate-user decision rather than reversing it.
+    status: accepted
+  - id: publish-by-digest
+    decision: Publish CI-built images to a registry and have production pin them by digest.
+    rationale: >-
+      A host that builds from source runs whatever that host compiled that day; a digest pin makes
+      the running artefact identical to the tested one and gives rollback without a rebuild. Local
+      Dockerfiles still build without any registry, so contributors are unaffected.
+    status: accepted
+  - id: signing-key-holding-pattern
+    decision: >-
+      Deployment provisions the Ed25519 signing seed as a root-owned credential delivered to the
+      control plane only; HSM or secure-element custody remains the Phase 1 target.
+    rationale: >-
+      The key-custody-hsm ADR requires HSM backing from Phase 1 and forbids a bare key file in
+      production as the end state. Hardware is not yet built, so this flow makes the interim
+      explicit, auditable, and never agent-adjacent instead of pretending the problem is solved.
+    status: accepted
+  - id: credentials-as-files
+    decision: >-
+      Every credential is resolved from a file when a *_FILE variable is set, falling back to the
+      environment only otherwise; the production profile refuses the environment path outright for
+      the signing key and the key-store token.
+    rationale: >-
+      Environment variables are readable from /proc/<pid>/environ, appear in container inspect
+      output, and are inherited by every child process the sidecar spawns for injection. Since the
+      deployment already has a file-based mechanism (systemd LoadCredential, Compose secrets),
+      making files the preferred source costs nothing and removes a class of exposure that would
+      otherwise be inherited by consumer processes. The production profile makes the preference
+      enforceable rather than advisory, so the convention cannot be forgotten on a real host.
+    status: accepted
+implementation:
+  primary: deploy/
+  test_code: scripts/verify-hardening.sh
+  test_code_status: manual
+see_also:
+  - smith-gray/sidecar
+  - smith-gray/control-plane
+  - smith-gray/envelope-encryption
+  - smith-gray/hardware-root

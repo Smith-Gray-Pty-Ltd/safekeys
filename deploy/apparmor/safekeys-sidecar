@@ -1,0 +1,88 @@
+# AppArmor profile for the Safekeys sidecar.
+#
+# The systemd unit already restricts the sidecar with filesystem, capability,
+# and system-call confinement. AppArmor adds a mandatory-access-control layer
+# that holds even if the process is tricked into a path the unit did not
+# anticipate: it constrains *which* files may be opened, not just which paths
+# are writable.
+#
+# Install:
+#   install -m 0644 deploy/apparmor/safekeys-sidecar /etc/apparmor.d/safekeys-sidecar
+#   apparmor_parser -r /etc/apparmor.d/safekeys-sidecar
+#
+# Then uncomment AppArmorProfile=safekeys-sidecar in
+# deploy/systemd/safekeys-sidecar.service and reload systemd.
+#
+# Hosts without AppArmor (for example SELinux-based distributions) should use a
+# targeted SELinux policy instead; the systemd directives cover the remainder.
+#
+# The profile is deliberately deny-by-default: nothing is permitted that is not
+# named below. A missing rule shows up as a failure in testing, which is the
+# right direction for the component that holds the decryption path.
+
+#include <tunables/global>
+
+# The binary path must match the installed location.
+profile safekeys-sidecar /usr/local/bin/safekeys-sidecar {
+
+  #include <abstractions/base>
+  #include <abstractions/openssl>
+
+  # ── Its own executable and shared libraries ───────────────────────────────
+  /usr/local/bin/safekeys-sidecar mr,
+
+  # ── The socket, and the folder root holding ciphertext ────────────────────
+  # Read-write: the sidecar creates and removes the socket, and reads objects.
+  /run/safekeys/ rw,
+  /run/safekeys/sidecar.sock rw,
+  /var/lib/safekeys/folder/ r,
+  /var/lib/safekeys/folder/** r,
+
+  # ── Configuration ─────────────────────────────────────────────────────────
+  /etc/safekeys/ r,
+  /etc/safekeys/** r,
+
+  # ── Credentials delivered by systemd ──────────────────────────────────────
+  # $CREDENTIALS_DIRECTORY is a per-unit path under /run/credentials.
+  /run/credentials/safekeys-sidecar/ r,
+  /run/credentials/safekeys-sidecar/** r,
+
+  # ── Wrapped consumers it spawns ───────────────────────────────────────────
+  # The sidecar executes the command named in a resolve request. That command
+  # may live anywhere the operator has installed, so this is intentionally
+  # broad — the confinement that matters is what the *sidecar* may do, not which
+  # binaries it may launch. Tighten to specific paths if your consumers are
+  # known ahead of time.
+  /{usr/local/,usr/,opt/,home/,srv/}** ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+
+  # ── Temporary files for the file-injection method ─────────────────────────
+  # PrivateTmp gives the service its own /tmp, so this cannot reach anyone
+  # else's temporary files.
+  /tmp/** rw,
+
+  # ── Networking ────────────────────────────────────────────────────────────
+  # HTTPS to the control plane and HTTP to the local key store.
+  network inet stream,
+  network inet6 stream,
+  # The Unix socket the sidecar serves is its only inbound channel.
+  network unix stream,
+
+  # ── Procfs: read-only, and only what systemd leaves visible ───────────────
+  @{PROC}/ r,
+  @{PROC}/@{pid}/ r,
+  @{PROC}/@{pid}/** r,
+
+  # ── Deny anything that would expand the attack surface ────────────────────
+  # No ptrace (would let a sibling read the sidecar's transient plaintext),
+  # no raw sockets, no mount, no capability escalation.
+  deny ptrace,
+  deny capability,
+  deny mount,
+  deny /sys/** w,
+  deny /proc/sys/** w,
+  deny @{PROC}/sys/** w,
+  deny /etc/shadow r,
+  deny /etc/safekeys/secrets/** r,
+}

@@ -161,3 +161,89 @@ jobs:
       # fixed, so a stale generated file is now a real failure worth failing on.
       - name: generate --check (no drift)
         run: usm generate --check
+
+  deploy:
+    name: Deployment (images, units, hardening)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The dev scripts share settings through scripts/lib/common.sh precisely
+      # because they drifted once (demo.sh and dev-down.sh disagreed with
+      # dev-up.sh about the socket path, so `make demo` could not find a running
+      # sidecar). Shellcheck keeps that class of bug visible.
+      - name: Shellcheck dev scripts
+        run: shellcheck --severity=warning scripts/*.sh scripts/lib/*.sh
+
+      # The systemd units must parse and resolve. This caught two real bugs
+      # during development (StartLimit* in the wrong section, missing
+      # ExecStart), so it is worth gating on.
+      - name: Validate systemd units
+        run: |
+          # Create the users, groups, binaries, and credential paths the units
+          # reference, so verify reports real unit errors rather than "user does
+          # not exist" noise.
+          for u in safekeys-sidecar safekeys-control-plane openbao; do
+            sudo useradd --system --no-create-home "$u" 2>/dev/null || true
+            sudo groupadd --system "$u" 2>/dev/null || true
+          done
+          sudo groupadd --system safekeys-socket 2>/dev/null || true
+          for b in /usr/local/bin/safekeys-sidecar /usr/local/bin/safekeys-cp /usr/local/bin/bao; do
+            sudo touch "$b"; sudo chmod +x "$b"
+          done
+          sudo mkdir -p /etc/safekeys/secrets /etc/openbao
+          for f in vault-token control-plane-api-key database-url signing-key api-key; do
+            sudo touch "/etc/safekeys/secrets/$f"
+          done
+          sudo touch /etc/openbao/openbao.hcl
+          sudo mkdir -p /var/lib/safekeys /var/lib/openbao
+
+          fail=0
+          for unit in deploy/systemd/*.service; do
+            echo "--- $unit"
+            sudo systemd-analyze verify "$unit" || fail=1
+          done
+          exit $fail
+
+      # Build both images and assert the least-privilege contracts directly on
+      # the artefacts (contract least-privilege-containers).
+      - name: Build images
+        run: |
+          docker build -f Dockerfile.control-plane -t safekeys-control-plane:ci .
+          docker build -f Dockerfile.sidecar -t safekeys-sidecar:ci .
+
+      - name: Images run non-root and carry no shell
+        run: |
+          fail=0
+          for img in safekeys-control-plane:ci safekeys-sidecar:ci; do
+            uid=$(docker image inspect "$img" --format '{{.Config.User}}')
+            echo "$img user=$uid"
+            case "$uid" in
+              ""|"0"|"0:0"|"root"|"root:root")
+                echo "::error::$img is configured to run as root"; fail=1 ;;
+            esac
+            if docker run --rm --entrypoint /bin/sh "$img" -c true 2>/dev/null; then
+              echo "::error::$img contains a shell"; fail=1
+            fi
+          done
+          exit $fail
+
+      # The decisive check: prove the unit's confinement still permits the
+      # operations the resolver performs (socket bind, fork/exec, file
+      # injection). A hardening directive that breaks the workload is worse
+      # than none, so this runs the real directives against a probe.
+      - name: Verify hardening is compatible with the workload
+        run: ./scripts/verify-hardening.sh
+
+      - name: Validate production Compose
+        run: |
+          cp deploy/.env.example deploy/.env
+          docker compose -f deploy/compose.prod.yml config --quiet
+          echo "deploy/compose.prod.yml: valid"
+          rm -f deploy/.env
+

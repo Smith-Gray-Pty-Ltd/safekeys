@@ -22,11 +22,13 @@ import (
 
 	cpclient "github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/cpclient"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/created"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/credential"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/folder"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keysource"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/keystore"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/localpolicy"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/profile"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/resolve"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/revocation"
@@ -42,6 +44,7 @@ func main() {
 func run() error {
 	var (
 		socket     = flag.String("socket", envOr("SAFEKEYS_SOCKET", "/run/safekeys/sidecar.sock"), "unix socket path")
+		socketGrp  = flag.String("socket-group", os.Getenv("SAFEKEYS_SOCKET_GROUP"), "shared group granted connect access to the socket (name or gid); unset keeps it owner-only 0600")
 		folderDir  = flag.String("folder", envOr("SAFEKEYS_FOLDER", defaultFolderRoot()), "folder root holding ciphertext objects")
 		audience   = flag.String("audience", envOr("SAFEKEYS_AUDIENCE", "env-local"), "resolver identity; tokens must match")
 		keyPath    = flag.String("keystore", envOr("SAFEKEYS_KEYSTORE", defaultKeystorePath()), "local KEK path (development mode only)")
@@ -52,8 +55,35 @@ func run() error {
 	)
 	flag.Parse()
 
-	// ── Verifier. Development reads a seed; production loads the control
-	// plane's public keys and the private key never exists here.
+	// Production refuses every development shortcut before anything else
+	// happens — before a key is fetched, a socket is bound, or a keystore is
+	// opened. Checking first means a misconfigured production start fails
+	// immediately with the reason, rather than after a network call to an
+	// authority it should not have been reaching.
+	var prod profile.Check
+	prod.Refuse(*vaultAddr == "", "no key store configured; set SAFEKEYS_VAULT_ADDR so the KEK never leaves the store")
+	prod.Refuse(os.Getenv("SAFEKEYS_ALLOW_INSECURE_KEYSTORE") == "1",
+		"SAFEKEYS_ALLOW_INSECURE_KEYSTORE is set; the KEK must live in the key store")
+	prod.Refuse(os.Getenv("SAFEKEYS_REVOCATION_OFFLINE") == "1",
+		"SAFEKEYS_REVOCATION_OFFLINE is set; revocation must be checked on every resolve")
+	prod.Refuse(os.Getenv("SAFEKEYS_VAULT_TOKEN") != "" &&
+		os.Getenv("SAFEKEYS_VAULT_TOKEN_FILE") == "",
+		"key store token supplied via the environment; mount it as a file and set SAFEKEYS_VAULT_TOKEN_FILE")
+	if err := prod.Fail(); err != nil {
+		return err
+	}
+	if profile.IsProduction() {
+		log.Println("sidecar: profile=production — development credential paths are refused")
+	}
+
+	// A token mounted as a file takes precedence over one in the environment,
+	// so a deployment can keep the value out of /proc/<pid>/environ entirely.
+	if tok, _, err := credential.FromEnv("SAFEKEYS_VAULT_TOKEN", "SAFEKEYS_VAULT_TOKEN_FILE"); err != nil {
+		return err
+	} else if tok != "" {
+		*vaultTok = tok
+	}
+
 	// ── Verifier. The sidecar holds PUBLIC keys only.
 	//
 	// This is the security boundary: the sidecar runs on the same host as the
@@ -84,12 +114,13 @@ func run() error {
 	inj.Capture = true
 
 	cfg := sidecar.Config{
-		SocketPath: *socket,
-		Audience:   *audience,
-		Verifier:   verifier,
-		Revoked:    revocationChecker(),
-		Policy:     openPolicy(),
-		Source:     folder.New(*folderDir),
+		SocketPath:  *socket,
+		SocketGroup: *socketGrp,
+		Audience:    *audience,
+		Verifier:    verifier,
+		Revoked:     revocationChecker(),
+		Policy:      openPolicy(),
+		Source:      folder.New(*folderDir),
 		Unwrap: func(ctx context.Context, keyID, wrapped string) ([]byte, error) {
 			return wrapper.Unwrap(keyID, wrapped)
 		},
@@ -114,6 +145,11 @@ func run() error {
 	}()
 
 	log.Printf("sidecar: resolving for audience %q, folder %s, socket %s", *audience, *folderDir, *socket)
+	if *socketGrp != "" {
+		log.Printf("sidecar: socket group %q granted connect access (agents may resolve; no other local user may)", *socketGrp)
+	} else {
+		log.Printf("sidecar: socket is owner-only (0600); set SAFEKEYS_SOCKET_GROUP to share it with agent users")
+	}
 	if os.Getenv("SAFEKEYS_REVOCATION_OFFLINE") == "1" {
 		log.Println("sidecar: WARNING — revocation checks are OFFLINE; revoked tokens remain usable until TTL expiry")
 	}
@@ -134,7 +170,7 @@ func revocationChecker() resolve.RevocationChecker {
 		return offlineRevocation{}
 	}
 	base := envOr("SAFEKEYS_CONTROL_PLANE_URL", "http://localhost:8080")
-	key := os.Getenv("SAFEKEYS_API_KEY")
+	key := apiKey()
 	c := revocation.New(base, key)
 	// Negative caching is OFF by default: caching a not-revoked result is what
 	// would let a token revoked inside the window still resolve, which the
@@ -151,7 +187,7 @@ func registryFor() sidecar.Registry {
 	if base == "" {
 		return nil
 	}
-	return cpclient.New(base, os.Getenv("SAFEKEYS_API_KEY"))
+	return cpclient.New(base, apiKey())
 }
 
 // creatorFor builds the secret-creation path.
@@ -167,7 +203,7 @@ func creatorFor(wrapper protocol.KeyWrapper, kid, folderRoot string) *created.Cr
 	return &created.Creator{
 		Wrapper:          wrapper,
 		KID:              kid,
-		Registry:         cpclient.New(base, os.Getenv("SAFEKEYS_API_KEY")),
+		Registry:         cpclient.New(base, apiKey()),
 		FolderRoot:       folderRoot,
 		DefaultPrincipal: envOr("SAFEKEYS_PRINCIPAL", "operator"),
 		DefaultAudience:  envOr("SAFEKEYS_AUDIENCE", "env-local"),
@@ -234,7 +270,7 @@ func openPolicy() resolve.PolicyChecker {
 
 	base := envOr("SAFEKEYS_CONTROL_PLANE_URL", "http://localhost:8080")
 	ttl := envDuration("SAFEKEYS_POLICY_CACHE_TTL", time.Minute)
-	e, err := localpolicy.New(localpolicy.NewHTTP(base, os.Getenv("SAFEKEYS_API_KEY")), ttl)
+	e, err := localpolicy.New(localpolicy.NewHTTP(base, apiKey()), ttl)
 	if err != nil {
 		// Fatal, not a warning: a sidecar that cannot load policy would deny
 		// everything, which looks like an outage rather than a misconfiguration.
@@ -324,9 +360,21 @@ func envDuration(k string, def time.Duration) time.Duration {
 	return def
 }
 
+// envOr returns the environment value or a default.
 func envOr(k, def string) string {
 	if v := os.Getenv(k); v != "" {
 		return v
 	}
 	return def
+}
+
+// apiKey resolves the control-plane client credential, preferring a mounted
+// file over the environment so the value need not appear in /proc or in a
+// container inspect output. SAFEKEYS_API_KEY_FILE names the file.
+func apiKey() string {
+	v, _, err := credential.FromEnv("SAFEKEYS_API_KEY", "SAFEKEYS_API_KEY_FILE")
+	if err != nil {
+		log.Fatalf("sidecar: %v", err)
+	}
+	return v
 }

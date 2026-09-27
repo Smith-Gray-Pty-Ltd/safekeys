@@ -296,6 +296,11 @@ index:
     ref: .usm/features/hardening/threshold-crypto.usm
     status: planned
     tags: [hardening, crypto, phase-2]
+  - id: deployment-packaging
+    name: Deployment Packaging
+    ref: .usm/features/deployment/deployment-packaging.usm
+    status: built
+    tags: [deployment, hardening, operations]
 
 roadmap:
   - id: phase-0-mvp

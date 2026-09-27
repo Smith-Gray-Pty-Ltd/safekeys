@@ -1,0 +1,80 @@
+# OpenBao (key store) — systemd unit for the production host.
+#
+# OpenBao holds the KEK. It is the one service that must never run in dev mode
+# on a real host: `-dev` stores everything in memory, uses a fixed root token,
+# and is explicitly not for production (feature smith-gray/deployment-packaging,
+# contract no-dev-credentials-in-prod).
+#
+# This unit expects an initialised, unsealed-after-restart server. Auto-unseal
+# is configured in openbao.hcl; without it, an unseal key must be supplied after
+# every restart, which is the deliberate trade-off described in deploy/README.md.
+#
+# Install:
+#   install -m 0644 deploy/systemd/openbao.service /etc/systemd/system/
+#   install -m 0640 deploy/openbao/openbao.hcl /etc/openbao/openbao.hcl
+#   systemctl daemon-reload
+#   systemctl enable --now openbao
+
+[Unit]
+Description=OpenBao key store (Safekeys KEK custodian)
+Documentation=https://openbao.org/docs
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=openbao
+Group=openbao
+
+# The IPC_LOCK capability is the only privilege OpenBao needs, and it is needed
+# for a specific reason: it lets the process mlock its memory so unseal material
+# and the KEK are never written to swap. Without it, key material could land on
+# disk.
+AmbientCapabilities=CAP_IPC_LOCK
+CapabilityBoundingSet=CAP_IPC_LOCK
+
+Environment=BAO_ADDR=https://0.0.0.0:8200
+Environment=BAO_LOG_LEVEL=info
+# Never BAO_DEV_ROOT_TOKEN_ID. Production uses real init-produced unseal shares.
+
+ExecStart=/usr/local/bin/bao server -config=/etc/openbao/openbao.hcl
+ExecReload=/bin/kill -HUP $MAINPID
+
+Restart=on-failure
+RestartSec=5s
+
+# ── Confinement ─────────────────────────────────────────────────────────────
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+
+# The data directory is the only writable path: it holds the encrypted storage
+# backend. Everything else is read-only under ProtectSystem=strict.
+ReadWritePaths=/var/lib/openbao
+StateDirectory=openbao
+StateDirectoryMode=0700
+
+# OpenBao listens on its API port and dials its storage backend. If the storage
+# backend is local, AF_UNIX covers it; if it is Postgres or a cloud store, the
+# internet families are required.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# A narrower filter than the sidecar's because mlock/munlock must remain
+# available for the IPC_LOCK promise above. @keyring is denied outright.
+SystemCallFilter=~@clock @cpu-emulation @debug @keyring @module @mount @obsolete @raw-io @reboot @swap
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

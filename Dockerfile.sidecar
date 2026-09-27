@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+#
+# Safekeys Sidecar / Resolver — the only component permitted to resolve a token.
+#
+# Multi-stage, static, non-root, no shell. See Dockerfile.control-plane for the
+# shared rationale.
+#
+# IMPORTANT — read before using this image.
+#
+# The sidecar's job in the MVP is to inject a resolved secret into a *consuming
+# process* it spawns itself (pkg/inject spawns the command as a child, with a
+# scrubbed environment). A container has its own process namespace, so a
+# containerised sidecar can only inject into consumers inside that same
+# container — it cannot reach a process running on the host.
+#
+# The supported topology is therefore:
+#
+#   * Reference (systemd):        sidecar on the host, consumers on the host.
+#   * Container (compose.prod):   sidecar AND its consumers in the same
+#                                 container/namespace, sharing the folder
+#                                 volume. Use this only when the consumer
+#                                 genuinely runs alongside the resolver.
+#
+# Running this image as a standalone resolver for host processes will appear to
+# resolve and then fail at injection. deploy/README.md spells out both topologies.
+#
+# Build:
+#   docker build -f Dockerfile.sidecar -t safekeys-sidecar .
+
+# ── Build ────────────────────────────────────────────────────────────────────
+FROM golang:1.26-alpine@sha256:8ac98ca534ac3f51e1f420a1dd2c15e74c75cfa0f23f3ad27eb5d7236c349a0c AS build
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+      -trimpath \
+      -ldflags="-s -w" \
+      -o /out/safekeys-sidecar ./apps/sidecar/cmd/sidecar
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
+
+# A fixed non-root uid/gid. The gid is the socket's shared group when the
+# containerised topology is used, so agent-side processes can be added to it.
+USER 65532:65532
+
+COPY --from=build /out/safekeys-sidecar /usr/local/bin/safekeys-sidecar
+
+# Runtime locations. The socket lives on a mounted volume so it is visible to
+# the group; folders hold ciphertext only.
+ENV SAFEKEYS_SOCKET=/run/safekeys/sidecar.sock \
+    SAFEKEYS_FOLDER=/var/lib/safekeys/folder \
+    SAFEKEYS_AUDIENCE=env-local
+
+ENTRYPOINT ["/usr/local/bin/safekeys-sidecar"]

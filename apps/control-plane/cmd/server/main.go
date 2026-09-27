@@ -23,6 +23,8 @@ import (
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/apps/control-plane/internal/policy"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/apps/control-plane/internal/store"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/apps/control-plane/internal/token"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/credential"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/profile"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
 	"github.com/jackc/pgx/v5/stdlib"
 
@@ -38,9 +40,9 @@ func main() {
 func run() error {
 	var (
 		addr      = flag.String("addr", envOr("SAFEKEYS_ADDR", ":8080"), "listen address")
-		dsn       = flag.String("database-url", os.Getenv("DATABASE_URL"), "Postgres DSN")
+		dsn       = flag.String("database-url", dsnFromEnv(), "Postgres DSN")
 		issuerURL = flag.String("issuer", envOr("SAFEKEYS_ISSUER", "https://cp.safekeys.local"), "issuer URL embedded in tokens (must be https)")
-		apiKey    = flag.String("api-key", os.Getenv("SAFEKEYS_API_KEY"), "API key clients must present")
+		apiKey    = flag.String("api-key", apiKeyFromEnv(), "API key clients must present")
 	)
 	flag.Parse()
 
@@ -48,10 +50,23 @@ func run() error {
 		return errors.New("DATABASE_URL is required")
 	}
 	if *apiKey == "" {
-		return errors.New("SAFEKEYS_API_KEY is required")
+		return errors.New("SAFEKEYS_API_KEY (or SAFEKEYS_API_KEY_FILE) is required")
 	}
 	if len(*issuerURL) < 8 || (*issuerURL)[:8] != "https://" {
 		return fmt.Errorf("issuer must be an https URL, got %q", *issuerURL)
+	}
+
+	// Production refuses development credential paths outright, so a shortcut
+	// cannot survive into a host that holds real secrets.
+	var prod profile.Check
+	prod.Refuse(os.Getenv("SAFEKEYS_DEV_SIGNING_KEY") != "" &&
+		os.Getenv("SAFEKEYS_DEV_SIGNING_KEY_FILE") == "",
+		"signing key supplied via the environment; mount it as a file and set SAFEKEYS_DEV_SIGNING_KEY_FILE")
+	if err := prod.Fail(); err != nil {
+		return err
+	}
+	if profile.IsProduction() {
+		log.Println("control-plane: profile=production — development credential paths are refused")
 	}
 
 	// ── Signing key. Development reads a seed from the environment; production
@@ -135,15 +150,23 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 
 // loadSigner builds the token signer.
 //
-// Development: a base64 Ed25519 seed in SAFEKEYS_DEV_SIGNING_KEY.
+// Development: a base64 Ed25519 seed in SAFEKEYS_DEV_SIGNING_KEY (or the file
+// named by SAFEKEYS_DEV_SIGNING_KEY_FILE, which is the production-shaped path
+// for delivering a root-owned credential).
 // Production: the key is provisioned into an HSM/secure element; only a handle
 // is present here (Phase 1 — see smith-gray/hardware-root).
 func loadSigner() (protocol.Signer, error) {
-	seedB64 := os.Getenv("SAFEKEYS_DEV_SIGNING_KEY")
+	seedB64, src, err := credential.FromEnv("SAFEKEYS_DEV_SIGNING_KEY", "SAFEKEYS_DEV_SIGNING_KEY_FILE")
+	if err != nil {
+		return nil, err
+	}
 	if seedB64 == "" {
 		return nil, errors.New(
-			"SAFEKEYS_DEV_SIGNING_KEY is required in this build; " +
+			"SAFEKEYS_DEV_SIGNING_KEY (or SAFEKEYS_DEV_SIGNING_KEY_FILE) is required in this build; " +
 				"production provisions the signing key into an HSM or secure element")
+	}
+	if src == credential.SourceEnv {
+		log.Println("control-plane: signing key loaded from the environment; prefer SAFEKEYS_DEV_SIGNING_KEY_FILE in production")
 	}
 	seed, err := base64.RawStdEncoding.DecodeString(seedB64)
 	if err != nil {
@@ -164,6 +187,28 @@ func envOr(k, def string) string {
 		return v
 	}
 	return def
+}
+
+// apiKeyFromEnv resolves the client credential, preferring a mounted file
+// (SAFEKEYS_API_KEY_FILE) over the environment so the value need not appear in
+// /proc/<pid>/environ or in a container inspect output.
+func apiKeyFromEnv() string {
+	v, _, err := credential.FromEnv("SAFEKEYS_API_KEY", "SAFEKEYS_API_KEY_FILE")
+	if err != nil {
+		log.Fatalf("control-plane: %v", err)
+	}
+	return v
+}
+
+// dsnFromEnv resolves the Postgres DSN. A password is embedded in it, so a
+// mounted file (DATABASE_URL_FILE) is preferred over the environment for the
+// same reason as the API key.
+func dsnFromEnv() string {
+	v, _, err := credential.FromEnv("DATABASE_URL", "DATABASE_URL_FILE")
+	if err != nil {
+		log.Fatalf("control-plane: %v", err)
+	}
+	return v
 }
 
 // ensure the pgx stdlib driver is linked in.

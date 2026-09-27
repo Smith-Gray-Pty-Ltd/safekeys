@@ -1,0 +1,59 @@
+# Build-context exclusions.
+#
+# The build context is the repository root, so anything not listed here is
+# copied to the builder. Two categories matter: development state that must
+# never reach an image (keys, ciphertext, logs) and bulk that would only slow
+# the build. `docker build` refuses to include a path that .gitignore has, but
+# it does not read .gitignore — hence this explicit list.
+
+# ── Never ship these ─────────────────────────────────────────────────────────
+# Local development state: signing seed, KEK file, folders, daemon logs.
+.dev/
+# Any real environment file. Credentials are mounted at run time, not baked in.
+.env
+.env.*
+*.pem
+*.key
+*.kek
+
+# ── Version control and editor noise ─────────────────────────────────────────
+.git/
+.gitignore
+.github/
+.DS_Store
+.idea/
+.vscode/
+
+# ── Build output and dependencies ────────────────────────────────────────────
+# node_modules must be excluded at every depth: the root copy alone would still
+# transfer ~180MB from packages/*/node_modules and slow every build.
+**/node_modules/
+**/dist/
+bin/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# ── Generated documentation and spec workspace ───────────────────────────────
+.usm-workspace/
+apps/*/.usm-workspace/
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+tests/auto-generated/
+
+# ── Local test and tool artifacts ────────────────────────────────────────────
+coverage/
+.nyc_output/
+# Python virtualenvs are large (~120MB each); exclude at every depth, or the
+# build walks them even though they would not be copied.
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/venv/
+**/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+*.test
+*.log
