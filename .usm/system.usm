@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: safekeys/system
 $type: system
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-28"
 version: "0.1.0"
 status: planned
 summary: |
@@ -102,7 +102,7 @@ services:
       - control-plane
   - id: safekeys
     name: Safekeys.ai Site
-    ref: apps/safekeys
+    ref: apps/site
     port: 3000
     type: web-app
     depends_on: []
@@ -198,7 +198,7 @@ deployment:
       url: https://safekeys.ai
       type: cloudflare-pages (planned)
       notes: |
-        Marketing site. apps/safekeys is not built yet; see safekeys/docs-hosting.
+        Marketing site. apps/site is not built yet; see safekeys/docs-hosting.
   notes: |
     MVP operator footprint: 2–3 small VMs or one small Kubernetes namespace, managed Postgres,
     OpenBao/Vault on a hardened VM, API keys plus mTLS for sidecars. Low hundreds of USD per month
@@ -238,7 +238,7 @@ local_development:
       requires_db: false
     - name: safekeys-site
       port: 3000
-      dev_command: npm run dev --workspace apps/safekeys
+      dev_command: npm run dev --workspace apps/site
       url_local: http://localhost:3000
       requires_db: false
   environment:
@@ -334,7 +334,7 @@ index:
   - id: resolution-injection
     name: Secret Injection Interfaces
     ref: .usm/features/resolution/secret-injection.usm
-    status: in-progress
+    status: built
     tags: [sidecar, injection, mvp]
   - id: resolution-exec-wrapper
     name: Exec Wrapper
@@ -349,7 +349,7 @@ index:
   - id: lifecycle-transport
     name: Secret Transport
     ref: .usm/features/lifecycle/secret-transport.usm
-    status: in-progress
+    status: built
     tags: [lifecycle, mvp, agents]
   - id: lifecycle-revocation
     name: Token Revocation
@@ -404,7 +404,7 @@ index:
   - id: deployment-docs-hosting
     name: Docs and Site Hosting
     ref: .usm/features/deployment/docs-hosting.usm
-    status: planned
+    status: built
     tags: [deployment, docs, cloudflare]
 
 roadmap:

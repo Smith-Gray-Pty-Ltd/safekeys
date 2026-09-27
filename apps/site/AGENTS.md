@@ -1,7 +1,7 @@
 <!-- USM:START -->
 # Safekeys.ai Site
 
-> Auto-generated from `.usm/services/safekeys.usm`. Hand-edit sections below; they'll be preserved on regeneration.
+> Auto-generated from `.usm/services/site.usm`. Hand-edit sections below; they'll be preserved on regeneration.
 
 ## Project Overview
 
@@ -20,18 +20,18 @@ Safekeys.ai Site — the public marketing and documentation presence at safekeys
 
 ```bash
 # Development
-cd apps/safekeys && npm run dev
-cd apps/safekeys && npm run build
-cd apps/safekeys && npm start
+cd apps/site && npm run dev
+cd apps/site && npm run build
+cd apps/site && npm start
 # Validation
-cd apps/safekeys && npm run lint
-cd apps/safekeys && npm run typecheck
+cd apps/site && npm run lint
+cd apps/site && npm run typecheck
 ```
 
 ## Directory Structure
 
-- `apps/safekeys` — source code
-- `apps/safekeys/.usm/` — USM source files
+- `apps/site` — source code
+- `apps/site/.usm/` — USM source files
 
 ## Key Rules
 

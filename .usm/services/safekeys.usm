@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: safekeys/site
 $type: service
 $version: 1
-$last_updated: "2026-09-22"
+$last_updated: "2026-09-28"
 summary: |
   Safekeys.ai Site — the public marketing and documentation presence at safekeys.ai, explaining the encrypted transport model, the open protocol, and the "Secrets move. Models don't see." positioning. It is the adoption front door for the open core.
 
@@ -13,7 +13,7 @@ type: web-app
 runtime: nextjs
 port: 3000
 paths:
-  - apps/safekeys
+  - apps/site
 depends_on: []
 
 tech_stack:
@@ -34,7 +34,7 @@ prod:
 
 testing:
   framework: vitest
-  command: "npm test --workspace apps/safekeys"
+  command: "npm test --workspace apps/site"
   coverage_target: "70%"
 
 security:
@@ -44,7 +44,7 @@ security:
 modules:
   - name: site
     purpose: Landing page, positioning, and protocol overview
-    paths: [apps/safekeys/app]
+    paths: [apps/site/app]
 
 risks:
   - "Public messaging must not overstate the MVP's guarantees; the threat model page is the source of truth for what is and is not mitigated."
