@@ -1,0 +1,196 @@
+openapi: 3.1.0
+info:
+  title: Smith & Gray AI Platform API
+  version: 1.0.0
+  description: Auto-generated from .usm/features/*.usm routes and contracts
+servers:
+  - url: http://localhost:3004
+    description: Local dev — default
+security:
+  - zitadelOidc: []
+paths:
+  /v1/objects:
+    post:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: postV1Objects
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+  /v1/tokens:
+    post:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: postV1Tokens
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+  /v1/tokens/{jti}:
+    delete:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: deleteV1Tokens{jti}
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+  /v1/audit:
+    get:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: getV1Audit
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+  /v1/policies:
+    get:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: getV1Policies
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+    put:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: putV1Policies
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+  /healthz:
+    get:
+      summary: 'The Control Plane API is the authority service: it allocates object ids, issues '
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        Contract: no-plaintext-in-api
+        - Request and response bodies carry identifiers, scopes, and metadata only
+        - The API has no create-with-value endpoint
+        - Contract enforced by schema tests on every handler
+      tags:
+        - control-plane-api
+      operationId: getHealthz
+      security: []
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ControlPlaneApi'
+components:
+  securitySchemes:
+    oidc:
+      type: oauth2
+      flows:
+        authorizationCode:
+          authorizationUrl: https://auth.example.com/oauth/v2/authorize
+          tokenUrl: https://auth.example.com/oauth/v2/token
+          scopes:
+            read: Read access
+            write: Write access
+  schemas:
+    ControlPlaneApi:
+      type: object
+      description: |-
+        Auto-generated from .usm/features/control-plane-api.usm
+        See [Feature: control-plane-api](../features/control-plane-api.md)
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier
+tags:
+  - name: control-plane-api
+    description: control-plane-api operations

@@ -39,6 +39,16 @@ Safekeys.ai — encrypted transport for secrets through environments, agentic fl
 4. **Never stop a running dev server.**
 5. **Never commit without passing lint AND typecheck.**
 
+## USM Reference
+
+This repo's `.usm/` files are the source of truth for THIS system. For questions about the USM tool itself:
+
+- **Spec context for this repo**: use MCP tools first (`usm_list`, `usm_read`, `usm_search`, `usm_query`) — do not guess file paths
+- **Tool reference** (CLI commands, MCP tools, schema, guides): <https://docs.usm.dev>
+- **USM internals / contributor docs** (full feature specs, architecture): <https://dev-docs.usm.dev>
+- **Schema**: <https://usm.dev/schema/v1.json>
+- **Bugs in the USM tool itself**: https://github.com/Smith-Gray-Pty-Ltd/usm/issues (not this repo's tracker)
+
 ## USM Spec-First Workflow
 
 This project uses USM for structured system documentation. Follow this workflow:

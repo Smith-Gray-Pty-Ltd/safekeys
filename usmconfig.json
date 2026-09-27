@@ -28,12 +28,10 @@
   "data": [],
   "outputs": {
     "usm_source": ".usm/",
-    "design_docs": "docs/design/",
     "help_docs": "docs/help/",
-    "api_docs": "docs/api/",
-    "agent_context": ".usm-workspace/",
+    "openapi": "docs/api/",
     "tests": "tests/auto-generated/",
-    "diagrams": "docs/diagrams/"
+    "agents_md": "AGENTS.md"
   },
   "generation": {
     "merge_with_existing": "smart",

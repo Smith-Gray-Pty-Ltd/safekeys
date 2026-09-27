@@ -140,8 +140,13 @@ jobs:
         with:
           node-version: "22"
 
+      # Pinned deliberately. The generator's output is version-dependent: 0.8.1
+      # did not emit the `## USM Reference` block in AGENTS.md that 0.9.0 does,
+      # so an unpinned install can change generated files (and therefore the
+      # drift gate below) with no change to this repository. Bump this
+      # deliberately and regenerate in the same commit.
       - name: install usm
-        run: npm install --global @smithgray/usm
+        run: npm install --global @smithgray/usm@0.9.0
 
       - name: validate specs
         run: |
@@ -154,13 +159,48 @@ jobs:
       - name: check
         run: usm check
 
-      # Gate on generated-output drift. This was blocked until USM 0.8.1 fixed
-      # two non-idempotency bugs we reported upstream (usm#32: generate appended
-      # a trailing newline to AGENTS.md every run; usm#37: two generators wrote
-      # docs/data/models.md, so --check compared against the wrong one). Both are
-      # fixed, so a stale generated file is now a real failure worth failing on.
-      - name: generate --check (no drift)
-        run: usm generate --check
+      # Gate on generated-output drift.
+      #
+      # `usm generate --check` cannot be used as-is here. It compares against
+      # files under .usm-workspace/ and apps/*/.usm-workspace/, which are
+      # gitignored build output: on a fresh checkout they do not exist, so every
+      # output is reported "(missing)" and the step fails on every commit — it
+      # never passed on main (155 outputs at ba42322). Running `usm generate`
+      # first would green it, but that is a placebo: --check then compares
+      # against the files that same run just wrote, so it can never detect
+      # drift in them.
+      #
+      # The honest gate is to regenerate and then ask git whether any committed
+      # generated file changed or any new one appeared. `git status --porcelain`
+      # is used rather than `git diff` because it also reports untracked files:
+      # adding a feature produces a NEW generated spec that must be committed,
+      # and `git diff` alone would miss it.
+      #
+      # Outputs covered (see usmconfig.json → outputs):
+      #   agents_md → AGENTS.md, apps/*/AGENTS.md
+      #   openapi   → docs/api/
+      #   tests     → tests/auto-generated/
+      # plus the rules files USM maintains for other agent runtimes.
+      - name: regenerate
+        run: usm generate
+
+      - name: generated outputs are committed (no drift)
+        run: |
+          generated_paths=(
+            'AGENTS.md'
+            'CLAUDE.md'
+            'apps/*/AGENTS.md'
+            '.cursor/rules/*.mdc'
+            '.github/copilot-instructions.md'
+            'docs/api/'
+            'tests/auto-generated/'
+          )
+          if [ -n "$(git status --porcelain -- "${generated_paths[@]}")" ]; then
+            echo "::error::Generated files are stale or missing. Run 'make generate' and commit the result."
+            git status --short -- "${generated_paths[@]}"
+            exit 1
+          fi
+          echo "ok — no tracked generated output is stale"
 
   deploy:
     name: Deployment (images, units, hardening)
