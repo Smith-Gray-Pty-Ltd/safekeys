@@ -43,24 +43,22 @@ if [[ ! -f "$KEYFILE" ]]; then
   echo "generated a new development signing key at $KEYFILE"
 fi
 
-export SAFEKEYS_DEV_SIGNING_KEY="$(cat "$KEYFILE")"
+# Assign then export: combining them would mask a read failure (SC2155), and a
+# silently empty signing key would mint tokens with a known-weak key.
+SAFEKEYS_DEV_SIGNING_KEY="$(cat "$KEYFILE")"
+export SAFEKEYS_DEV_SIGNING_KEY
 export SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1
-export SAFEKEYS_API_KEY="${SAFEKEYS_API_KEY:-dev-api-key}"
 export SAFEKEYS_KID="${SAFEKEYS_KID:-dev-key-1}"
 export DATABASE_URL="${DATABASE_URL:-postgres://safekeys:safekeys-dev-password@localhost:5432/safekeys?sslmode=disable}"
 export SAFEKEYS_ISSUER="${SAFEKEYS_ISSUER:-https://cp.safekeys.local}"
 export SAFEKEYS_ADDR="${SAFEKEYS_ADDR:-:8080}"
-export SAFEKEYS_CONTROL_PLANE_URL="${SAFEKEYS_CONTROL_PLANE_URL:-http://localhost:8080}"
-export SAFEKEYS_AUDIENCE="${SAFEKEYS_AUDIENCE:-env-local}"
-export SAFEKEYS_PRINCIPAL="${SAFEKEYS_PRINCIPAL:-operator}"
-export SAFEKEYS_KEYSTORE="$DEV/kek"
-export SAFEKEYS_FOLDER="$DEV/folder"
-# Use the CONVENTIONAL socket path, which is what the Go, TypeScript and Python
-# clients all default to ($TMPDIR/safekeys/sidecar.sock). Aligning them means the
-# MCP server, SDK and CLI all find the sidecar with no environment configuration
-# at all. Override SAFEKEYS_SOCKET for a non-default setup.
-TMPBASE="${TMPDIR:-/tmp}"; TMPBASE="${TMPBASE%/}"
-export SAFEKEYS_SOCKET="${SAFEKEYS_SOCKET:-$TMPBASE/safekeys/sidecar.sock}"
+
+# Shared settings — the socket path, API key, control-plane URL, audience,
+# keystore and folder. Defined once in scripts/lib/common.sh so dev-up.sh,
+# dev-down.sh and demo.sh cannot disagree about where the sidecar listens.
+# shellcheck source=lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
+
 mkdir -p "$(dirname "$SAFEKEYS_SOCKET")"
 
 # ── Start ────────────────────────────────────────────────────────────────────

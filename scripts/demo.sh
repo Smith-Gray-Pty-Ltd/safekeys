@@ -9,14 +9,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEV="$ROOT/.dev"
 
-export SAFEKEYS_SOCKET="${SAFEKEYS_SOCKET:-$DEV/sidecar.sock}"
-export SAFEKEYS_API_KEY="${SAFEKEYS_API_KEY:-dev-api-key}"
-export SAFEKEYS_CONTROL_PLANE_URL="${SAFEKEYS_CONTROL_PLANE_URL:-http://localhost:8080}"
+# Shared settings — most importantly SAFEKEYS_SOCKET, which must be derived the
+# same way dev-up.sh derives it. See scripts/lib/common.sh for why.
+# shellcheck source=lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
+
+# The demo creates secrets through the sidecar, so the local file KEK must be
+# enabled. This is development-only and is not a production configuration.
 export SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1
-export SAFEKEYS_KEYSTORE="${SAFEKEYS_KEYSTORE:-$DEV/kek}"
-export SAFEKEYS_FOLDER="${SAFEKEYS_FOLDER:-$DEV/folder}"
-export SAFEKEYS_AUDIENCE="${SAFEKEYS_AUDIENCE:-env-local}"
-export SAFEKEYS_PRINCIPAL="${SAFEKEYS_PRINCIPAL:-operator}"
 
 SFK="$ROOT/bin/safekeys"
 SECRET="sk-live-DEMO-$(python3 -c 'import secrets;print(secrets.token_hex(6))')"

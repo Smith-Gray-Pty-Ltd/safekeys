@@ -1,3 +1,9 @@
+# The Compose project name is declared rather than inferred from the directory
+# basename, so containers, the network, and the volume are always named
+# safekeys-* / safekeys_* regardless of where the repository is checked out.
+# See .usm/system.usm (local_development) for the captured dev facts.
+name: safekeys
+
 services:
   # Postgres — control plane state: objects, tokens, audit, policy.
   # See .usm/services/control-plane-db.usm

@@ -6,6 +6,10 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEV="$ROOT/.dev"
 
+# Shared settings, so the socket cleaned up here is the one dev-up.sh bound.
+# shellcheck source=lib/common.sh
+source "$ROOT/scripts/lib/common.sh"
+
 stopped=0
 for name in control-plane sidecar; do
   pidfile="$DEV/$name.pid"
@@ -19,8 +23,10 @@ for name in control-plane sidecar; do
   fi
 done
 
-# The sidecar removes its own socket on a clean shutdown.
-[[ -S "$DEV/sidecar.sock" ]] && rm -f "$DEV/sidecar.sock"
+# The sidecar removes its own socket on a clean shutdown, so this is only a
+# safety net for an unclean exit. SAFEKEYS_SOCKET comes from lib/common.sh, so
+# it is the same path dev-up.sh bound.
+[[ -S "$SAFEKEYS_SOCKET" ]] && rm -f "$SAFEKEYS_SOCKET"
 
 if [[ $stopped -eq 0 ]]; then
   echo "nothing running"
