@@ -1,0 +1,323 @@
+$schema: https://usm.dev/schema/v1.json
+$id: safekeys/output-control
+$type: feature
+$version: 1
+$last_updated: "2026-09-28"
+summary: >-
+  Output control for model-facing resolution: the sidecar redacts the resolved value (raw, base64,
+  base64url, hex, percent, JSON-escaped, and split-across-chunks forms, including substrings of 8+
+  characters) out of any stdout/stderr it relays, replacing matches with [REDACTED:safekeys];
+  resolve_for_tool defaults to exit code plus redacted, size-capped output; policy rules can bind
+  allowed commands (executable path plus argument patterns) per object and scope, and MCP-initiated
+  resolves are denied unless an allowlist exists; CLI and SDK resolves fall back to a documented
+  backstop denylist for known dumpers. Redaction lives in the sidecar, never the MCP server.
+$system: safekeys/system
+$service: safekeys/sidecar
+intent: >-
+  resolve_for_tool runs a model-chosen command and relays its output to the model, so a
+  prompt-injected agent can run printenv, env, cat, or echo and read the secret straight back —
+  today nothing redacts output and policy cannot restrict which commands run. Closing this needs
+  defence in depth at the trust boundary, not in the agent's process: redact the value out of
+  anything the sidecar relays, make status-only output the default, and let policy bind which
+  commands may run.
+status: planned
+flows:
+  - id: redact-relayed-output
+    name: Redact the resolved value out of relayed output
+    steps:
+      - action: receive
+        id: s1
+        target: The sidecar resolves a token and injects the value into a command.
+      - action: validate
+        id: s2
+        target: >-
+          Before returning captured stdout/stderr, the sidecar scans for the value and any substring
+          of it of 8+ characters (or the full value when shorter) in raw, base64, base64url, hex,
+          percent-encoded, and JSON-escaped form, split across adjacent lines or chunks included.
+      - action: send
+        id: s3
+        target: Each match is replaced with [REDACTED:safekeys] before the output leaves the sidecar.
+      - action: record
+        id: s4
+        target: A redaction event is appended to the audit log carrying counts, not values.
+  - id: status-only-by-default
+    name: Return status-only output by default
+    steps:
+      - action: receive
+        id: s1
+        target: An MCP resolve_for_tool call completes.
+      - action: observe
+        id: s2
+        target: The tool result carries the exit code and redacted output capped at 4 KiB.
+      - action: validate
+        id: s3
+        target: Uncapped output is returned only when policy explicitly allows it for that token's scope and object.
+      - action: observe
+        id: s4
+        target: The tool description tells the model output is redacted and size-capped.
+  - id: command-allowlist
+    name: Require an allowlist for MCP-initiated resolves
+    steps:
+      - action: setup
+        id: s1
+        target: >-
+          An operator rule binds allowed command specifications — executable path plus argument
+          patterns — to an object and scope.
+      - action: validate
+        id: s2
+        target: >-
+          At resolve, a request carrying an MCP origin must match a specification; when no allowlist
+          governs the token and scope, MCP-initiated resolves are refused with an error telling the
+          operator to add one.
+      - action: record
+        id: s3
+        target: The denial names the rule and carries no value.
+  - id: backstop-denylist
+    name: Refuse known dumpers for CLI and SDK resolves without an allowlist
+    steps:
+      - action: receive
+        id: s1
+        target: A CLI or SDK resolve arrives with no command allowlist governing it.
+      - action: validate
+        id: s2
+        target: >-
+          The sidecar refuses env, printenv, set, export, cat, head, tail, less, more, echo,
+          printf, tee, cp, mv, dd, base64, xxd, od, hexdump, strings, and any interpreter invoked
+          with an inline-code flag — sh, bash, zsh, fish -c; python, python3 -c; node -e or --eval;
+          perl -e; ruby -e; php -r; awk; osascript -e.
+      - action: record
+        id: s3
+        target: The refusal is audited with a reason and no value.
+      - action: observe
+        id: s4
+        target: Documentation states the denylist is a backstop; the controls are the allowlist and redaction.
+contracts:
+  - description: >-
+      Any output the sidecar captures and relays through its API is scanned for the resolved value
+      before it leaves the sidecar.
+    id: output-redacted-in-sidecar
+    must_have:
+      - >-
+        Redaction is implemented in the sidecar, not the MCP server — every socket client benefits
+        and the agent-adjacent process is never trusted to redact
+      - >-
+        Scanned encodings cover raw bytes, base64, base64url, hex, percent-encoding, JSON string
+        escaping, and the value split across adjacent output lines or chunks
+      - >-
+        Substrings of the value of 8+ characters (or the full value when it is shorter) are matched
+        in every listed encoding, so partial echoes like cut -c1-20 are caught
+      - Each match is replaced with [REDACTED:safekeys]
+      - A redaction event is recorded in the audit log containing no value material
+  - description: >-
+      The default resolve_for_tool response carries an exit code and redacted output capped at 4 KiB;
+      larger or uncapped output requires explicit policy.
+    id: status-only-default
+    must_have:
+      - The default response carries the exit code, redacted stdout and stderr capped at 4 KiB
+      - >-
+        Uncapped or full-output mode is granted only by an explicit policy allowance for the token's
+        scope and object
+      - Redaction applies in every output mode, including policy-allowed full output
+      - >-
+        Exec-wrapper runs that inherit the operator's terminal streams are documented as out of
+        scope (a human watching their own terminal is not the threat)
+  - description: >-
+      Policy rules can bind the commands a resolve may run, per object and scope; MCP-initiated
+      resolves are denied unless an allowlist exists.
+    id: command-policy
+    must_have:
+      - >-
+        A policy rule may carry allowed command specifications: exact executable path plus argument
+        patterns
+      - >-
+        When a rule governing the request carries commands, the requested command must match one
+        specification or the resolve is denied
+      - >-
+        An MCP-initiated resolve with no command allowlist governing its token and scope is refused,
+        with a clear error telling the operator to add an allowlist
+      - >-
+        Command restrictions live in policy rules, not token claims — the token schema stays frozen
+        and conformance vectors are unaffected
+      - The MCP tool description states that output is redacted and that commands are policy-limited
+  - description: >-
+      When no command allowlist governs a CLI or SDK request, known secret-dumping commands are
+      refused as a backstop; the backstop never applies to MCP-initiated resolves, which require an
+      allowlist outright.
+    id: backstop-denylist
+    must_have:
+      - >-
+        With no allowlist, env, printenv, set, export, cat, head, tail, less, more, echo, printf,
+        tee, cp, mv, dd, base64, xxd, od, hexdump, strings, and any interpreter invoked with an
+        inline-code flag (sh/bash/zsh/fish -c, python/python3 -c, node -e/--eval, perl -e, ruby -e,
+        php -r, awk, osascript -e) are refused for CLI and SDK resolves
+      - The denial is audited with a reason and no value
+      - >-
+        Documentation states the denylist is a backstop, not the control — the controls are the
+        allowlist and redaction
+  - description: >-
+      The resolved value reaches the consumer only through its environment or a 0600 file, never the
+      command line.
+    id: no-secret-on-argv
+    must_have:
+      - Injection passes values via child environment or 0600 temp file only
+      - No code path places the resolved value in argv
+      - Tests assert /proc-style argument inspection cannot reveal the value
+  - description: >-
+      Redactions and command denials are recorded without values, and the security claims are
+      written down honestly.
+    id: audit-and-honest-claims
+    must_have:
+      - Redaction events and command denials appear in the audit log with no secret material
+      - >-
+        The README gains a Security guarantees and limits section stating what is now mitigated and
+        what remains — network exfiltration by a malicious allowed command, a file the allowed
+        command can write for the agent to read later, and a rooted host
+      - That section is written so the marketing site may quote it verbatim
+tests:
+  - contracts:
+      - output-redacted-in-sidecar
+    expect:
+      - assertion: the tool result contains no raw or encoded form of the secret
+      - assertion: matches are replaced with [REDACTED:safekeys]
+      - assertion: an audit record for the redaction exists and contains no value
+    flow: redact-relayed-output
+    id: printenv-env-echo-leak-nothing
+    setup:
+      attempts:
+        - printenv SAFEKEYS_SECRET
+        - env
+        - echo $SAFEKEYS_SECRET
+        - cat injected-file
+      secret_value: redteam-canary-value
+  - contracts:
+      - output-redacted-in-sidecar
+    expect:
+      - assertion: base64, base64url, hex, percent-encoded, and JSON-escaped renderings are all redacted
+      - assertion: base64 wrapped across lines is redacted
+    flow: redact-relayed-output
+    id: encoded-forms-redacted
+    setup:
+      attempts:
+        - base64 of env value with fold wrapping
+        - xxd hex dump
+        - python urllib quote
+        - python json dumps
+  - contracts:
+      - output-redacted-in-sidecar
+    expect:
+      - assertion: the value split across adjacent output chunks is detected and redacted
+    flow: redact-relayed-output
+    id: split-across-chunks-redacted
+    setup:
+      attempts:
+        - command writes half the value to stdout and half to stderr
+        - command writes the value in two chunks with a delay
+  - contracts:
+      - output-redacted-in-sidecar
+    expect:
+      - assertion: a partial echo of the first 20 characters is redacted
+      - assertion: substrings shorter than 8 characters are not treated as matches
+    flow: redact-relayed-output
+    id: partial-leak-redacted
+    setup:
+      attempts:
+        - cut -c1-20 of the env value
+  - contracts:
+      - command-policy
+    expect:
+      - assertion: the resolve is denied
+      - assertion: the denial names the rule
+      - assertion: no unwrap occurs
+    flow: command-allowlist
+    id: disallowed-command-refused
+    setup:
+      allowlist:
+        - /usr/bin/curl https://api.example.com/*
+      requested: /bin/cat /etc/passwd
+  - contracts:
+      - command-policy
+    expect:
+      - assertion: the MCP resolve is refused
+      - assertion: the error tells the operator to add a command allowlist
+    flow: command-allowlist
+    id: mcp-without-allowlist-refused
+    setup:
+      allowlist: null
+      origin: mcp
+      requested: /usr/bin/curl https://api.example.com/
+  - contracts:
+      - backstop-denylist
+    expect:
+      - assertion: every listed dumper is refused
+      - assertion: the refusal is audited with a reason and no value
+    flow: backstop-denylist
+    id: dumper-backstop-refused
+    setup:
+      allowlist: null
+      attempts:
+        - env
+        - printenv SAFEKEYS_SECRET
+        - base64 <<< $SAFEKEYS_SECRET
+        - xxd
+        - od
+        - hexdump
+        - strings /dev/stdin
+        - python3 -c 'import os;print(os.environ["SAFEKEYS_SECRET"])'
+        - node -e 'console.log(process.env.SAFEKEYS_SECRET)'
+        - awk 'BEGIN{print ENVIRON["SAFEKEYS_SECRET"]}'
+        - osascript -e 'system info'
+      origin: cli
+  - contracts:
+      - status-only-default
+    expect:
+      - assertion: default output is capped at 4 KiB
+      - assertion: policy-allowed output is uncapped but still redacted
+    flow: status-only-by-default
+    id: full-output-requires-policy
+    setup:
+      output_size: 64KiB
+  - contracts:
+      - audit-and-honest-claims
+    expect:
+      - assertion: no known leak attempt returns the secret in any encoding
+      - assertion: every denial and redaction appears in the audit log without values
+    flow: redact-relayed-output
+    id: redteam-script-clean
+    setup:
+      script: scripts/redteam-mcp.sh
+decisions:
+  - id: redaction-in-sidecar-not-mcp
+    decision: Implement redaction in the sidecar's relay path rather than in the MCP server.
+    rationale: The sidecar is the trust boundary every client shares. Redacting in the agent-adjacent MCP server would trust the least privileged component to protect the most sensitive data, and any other socket client (CLI, SDKs) would silently miss the protection.
+    status: accepted
+    date: "2026-09-28"
+  - id: mcp-deny-by-default
+    decision: MCP-initiated resolves require an explicit command allowlist; without one they are refused regardless of the denylist.
+    rationale: The MCP caller is model-chosen by construction — the model authors the command — so the default posture must be refuse-with-guidance rather than best-effort filtering. The clear error converts a denial into a one-step operator fix. CLI and SDK resolves are operator-initiated, where the backstop denylist plus redaction is a defensible default.
+    consequences: The resolve request gains an origin field (mcp, cli, sdk). Operators must author allowlists for MCP use; the error message makes that actionable.
+    status: accepted
+    date: "2026-09-28"
+  - id: denylist-is-a-backstop
+    decision: Keep a denylist of known dumpers for CLI and SDK resolves and document it as a backstop, not the control.
+    rationale: The allowlist and redaction are the controls. A denylist cannot enumerate every exfiltration vector, and pretending otherwise would overstate the guarantee. The list is still worth having because it catches the lazy injection for free.
+    status: accepted
+    date: "2026-09-28"
+  - id: commands-in-policy-not-claims
+    decision: Command restrictions live in policy rules, not token claims.
+    rationale: The token claims schema is frozen by conformance vectors and adding command syntax to every token would bloat the artefact agents reason about. Policy rules are operator-authored and changeable without touching the wire format.
+    status: accepted
+    date: "2026-09-28"
+  - id: substrings-not-whole-value
+    decision: Redact substrings of the secret of 8+ characters (or the full value when shorter), in every listed encoding.
+    rationale: A prompt-injected command rarely prints the whole value — cut, head -c, or a partial log line leaks a prefix or a slice. Short fragments below 8 characters would produce false positives on ordinary output, so the floor is a deliberate trade of completeness for practicality.
+    status: accepted
+    date: "2026-09-28"
+implementation:
+  primary: pkg/sidecar/server.go
+  test_code: pkg/redact/redact_test.go
+  test_code_status: none
+see_also:
+  - safekeys/sidecar-resolution
+  - safekeys/policy-engine
+  - safekeys/integration-mcp-server
+  - safekeys/audit-logging

@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: safekeys/integration-mcp-server
 $type: feature
 $version: 1
-$last_updated: "2026-09-25"
+$last_updated: "2026-09-28"
 summary: |
   The Safekeys MCP server exposes secret tooling to every MCP-capable agent runtime — Claude,
   Cursor, Codex, Gemini — through one standard tool bus. It is the highest-leverage MVP
@@ -52,6 +52,7 @@ contracts:
       - Results carry tokens, folder paths, or status codes
       - No tool returns a resolved value
       - Tool arguments carry tokens, not values
+      - Relayed command output is redacted and size-capped by the sidecar before it reaches a tool result
   - id: single-server-many-runtimes
     description: One MCP server serves all compatible runtimes without per-vendor code.
     must_have:

@@ -1,0 +1,168 @@
+$schema: https://usm.dev/schema/v1.json
+$id: safekeys/dev-key-custody
+$type: feature
+$version: 1
+$last_updated: "2026-09-28"
+summary: >-
+  Development-stack key custody: the KEK must not be readable by the same OS user the coding agent
+  runs as. The default dev flow stores the KEK in the macOS Keychain (ACL restricted to the sidecar
+  binary) or a containerised OpenBao dev instance on Linux; a plaintext file survives only behind
+  SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 with a loud startup warning and a permission check, and a
+  documented separate-user mode runs the sidecar as a dedicated user with peer-credential checks on
+  the socket.
+$system: safekeys/system
+$service: safekeys/sidecar
+intent: >-
+  The dev stack currently stores the KEK in a 0600 file owned by the same OS user as any coding
+  agent, so an agent with file access can read it and the deployment's separate-user promise does
+  not exist locally. The default dev flow must keep the KEK out of an agent-readable file — Keychain
+  on macOS, the containerised dev OpenBao on Linux — with a plaintext file available only behind an
+  explicit, loudly-warned opt-in, and a documented separate-user mode for hosts where the stronger
+  boundary matters.
+status: planned
+flows:
+  - id: dev-kek-in-keychain
+    name: Dev KEK lives in the macOS Keychain
+    steps:
+      - action: setup
+        id: s1
+        target: scripts/dev-up.sh creates or reuses a Keychain item whose ACL grants only the sidecar binary.
+      - action: receive
+        id: s2
+        target: The sidecar reads the KEK from the Keychain at startup; no plaintext KEK file exists on disk.
+      - action: observe
+        id: s3
+        target: A same-user process other than the sidecar reading the item triggers a user-visible ACL prompt or denial.
+      - action: observe
+        id: s4
+        target: .dev/ contains no KEK file and the sidecar resolves normally.
+  - id: dev-kek-in-openbao
+    name: Dev KEK lives in the dev OpenBao instance
+    steps:
+      - action: setup
+        id: s1
+        target: The dev Compose stack runs OpenBao in a container under its own user, as it already does.
+      - action: receive
+        id: s2
+        target: The sidecar uses Vault transit by default on Linux; the KEK never exists as a file the agent user can read.
+      - action: observe
+        id: s3
+        target: No KEK file appears in .dev/ or the home directory.
+  - id: insecure-file-opt-in
+    name: Plaintext key file is an explicit, loud opt-in
+    steps:
+      - action: receive
+        id: s1
+        target: SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 is the only way the local file keystore activates.
+      - action: validate
+        id: s2
+        target: The sidecar refuses to start when the key file is group- or world-readable.
+      - action: observe
+        id: s3
+        target: Startup prints a loud warning that the mode is not for real secrets.
+      - action: observe
+        id: s4
+        target: Documentation marks the mode as not for real secrets.
+  - id: separate-user-local-mode
+    name: Separate-user local mode with peer-credential checks
+    steps:
+      - action: setup
+        id: s1
+        target: >-
+          A documented script creates a dedicated sidecar user and an agent group; the sidecar runs
+          as the dedicated user.
+      - action: validate
+        id: s2
+        target: The sidecar checks the peer credential (uid/gid) of every socket connection, not only filesystem permissions.
+      - action: observe
+        id: s3
+        target: An agent in the group resolves; a process outside the group is denied even if socket permissions change.
+contracts:
+  - description: >-
+      The default development flow must not leave a key-encryption key readable by the same OS user
+      the coding agent runs as.
+    id: default-dev-no-readable-kek
+    must_have:
+      - The default dev flow leaves no KEK file readable by the agent user in the repo or home directory
+      - macOS stores the dev KEK in the Keychain with access restricted to the sidecar binary
+      - >-
+        Linux stores the dev KEK in a containerised OpenBao dev instance running as its own user,
+        never a plaintext file
+      - The plaintext key-file path is removed from the default dev flow
+  - description: The plaintext key-file mode is opt-in, loud, and refuses unsafe permissions.
+    id: insecure-file-strict
+    must_have:
+      - File mode requires SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 explicitly
+      - Startup prints a loud warning naming the mode not for real secrets when file mode is active
+      - The sidecar refuses to start with a key file that is group- or world-readable
+      - Documentation marks file mode as not for real secrets
+  - description: A documented local mode reproduces the deployment's user separation on a developer machine.
+    id: separate-user-socket
+    must_have:
+      - A documented mode runs the sidecar as a dedicated user with agents in a shared group
+      - The sidecar verifies socket peer credentials on every connection
+      - A process outside the allowed group is denied even if filesystem permissions change
+      - Key material and .dev/ state are gitignored and excluded from image build contexts
+tests:
+  - contracts:
+      - default-dev-no-readable-kek
+    expect:
+      - assertion: no KEK file readable by the agent user exists at .dev/kek or ~/.safekeys/kek
+      - assertion: the sidecar resolves a token successfully
+    flow: dev-kek-in-keychain
+    id: default-dev-leaves-no-kek-file
+    setup:
+      command: scripts/dev-up.sh
+      platform: macos
+  - contracts:
+      - insecure-file-strict
+    expect:
+      - assertion: the sidecar exits with an error and serves nothing
+    flow: insecure-file-opt-in
+    id: insecure-file-refuses-loose-perms
+    setup:
+      keyfile_mode: "0644"
+  - contracts:
+      - insecure-file-strict
+    expect:
+      - assertion: the startup log contains the not-for-real-secrets warning
+      - assertion: resolution works
+    flow: insecure-file-opt-in
+    id: insecure-file-warns-loudly
+    setup:
+      keyfile_mode: "0600"
+      opt_in: true
+  - contracts:
+      - separate-user-socket
+    expect:
+      - assertion: the agent user in the group can connect and resolve
+      - assertion: a user outside the group is denied even if socket permissions are relaxed
+    flow: separate-user-local-mode
+    id: separate-user-denies-outsider
+    setup:
+      agent_user: in-group
+      other_user: out-group
+decisions:
+  - id: keep-insecure-keystore-name
+    decision: Keep SAFEKEYS_ALLOW_INSECURE_KEYSTORE as the file-mode opt-in rather than renaming to SAFEKEYS_DEV_INSECURE_KEYFILE.
+    rationale: The variable already exists, is documented, and is asserted by the production refuse test. Renaming it would churn every reference for no security gain; the semantics being added (permission check, loud warning) do not require a new name.
+    status: accepted
+    date: "2026-09-28"
+  - id: keychain-is-a-speed-bump-not-a-boundary
+    decision: Document the macOS Keychain ACL as raising the bar, not as an OS boundary.
+    rationale: A same-user process can still trigger the ACL prompt and a user can approve it. The honest claim is that an agent cannot silently read the KEK; the strong local boundary is the separate-user mode, which mirrors the deployment threat model.
+    status: accepted
+    date: "2026-09-28"
+  - id: openbao-dev-is-the-linux-default
+    decision: Make the containerised dev OpenBao the default Linux dev keystore instead of the local file.
+    rationale: The dev Compose stack already runs OpenBao under its own container user; pointing the sidecar at Vault transit costs no new infrastructure and removes the plaintext file from the default path entirely.
+    status: accepted
+    date: "2026-09-28"
+implementation:
+  primary: apps/sidecar/cmd/sidecar/main.go
+  test_code: pkg/keystore/keystore_test.go
+  test_code_status: none
+see_also:
+  - safekeys/envelope-encryption
+  - safekeys/deployment-packaging
+  - safekeys/sidecar-resolution

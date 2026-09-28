@@ -2,7 +2,7 @@ $schema: https://usm.dev/schema/v1.json
 $id: safekeys/sidecar-resolution
 $type: feature
 $version: 1
-$last_updated: "2026-09-25"
+$last_updated: "2026-09-28"
 summary: |
   Token resolution is the act that turns a capability token into a plaintext value for exactly one
   non-LLM consumer. It happens only in the privileged sidecar: verify the token, unwrap the DEK,
@@ -124,6 +124,7 @@ tests:
       - assertion: the agent can only request resolution via the token it holds
       - assertion: injected values are not readable back through the sidecar
       - assertion: no long-term key material is reachable from the agent's process
+      - assertion: command output relayed through the sidecar carries no resolved value in raw or encoded form
     contracts:
       - resolution-only-in-sidecar
       - agent-gets-status-not-value

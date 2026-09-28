@@ -80,6 +80,7 @@ describe('resolution/sidecar-resolution', () => {
     // expect: assertion: the agent can only request resolution via the token it holds
     // expect: assertion: injected values are not readable back through the sidecar
     // expect: assertion: no long-term key material is reachable from the agent's process
+    // expect: assertion: command output relayed through the sidecar carries no resolved value in raw or encoded form
   });
 
 });

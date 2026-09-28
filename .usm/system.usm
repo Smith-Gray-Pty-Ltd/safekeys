@@ -456,6 +456,45 @@ risks:
     severity: high
     status: accepted
     mitigation: Out of scope even in later phases. The product exists to make this unnecessary, not to detect it.
+  - id: output-relay-leak
+    title: A prompt-injected agent reads the secret back out of relayed command output
+    description: >-
+      resolve_for_tool runs a model-chosen command and relays its output to the model. A command
+      such as printenv, env, or cat on the injected file would echo the value straight back into
+      model context, and encodings (base64, hex) or partial echoes would evade a naive check.
+    severity: high
+    status: mitigated
+    mitigation: >-
+      The sidecar redacts the resolved value — and substrings of 8+ characters — from any output it
+      relays, in raw, base64, base64url, hex, percent-encoded, and JSON-escaped form, including
+      split-across-chunk matches; output is size-capped by default; MCP-initiated resolves require a
+      command allowlist and CLI/SDK resolves fall back to a documented backstop denylist. See
+      safekeys/output-control.
+  - id: network-exfil-allowed-command
+    title: An allowed command exfiltrates the secret over the network or via a written file
+    description: >-
+      Redaction covers only the sidecar's relay channel. A command the policy allows can send the
+      value to a remote host under its own protocols, or write it to a file the agent can later
+      read; neither passes back through the relay.
+    severity: medium
+    status: accepted
+    mitigation: >-
+      Command allowlists bind high-value tokens to exact executables and argument patterns. The
+      residual risk is stated in the README's Security guarantees and limits section rather than
+      claimed away.
+  - id: dev-kek-agent-readable
+    title: The development KEK is readable by the same user the coding agent runs as
+    description: >-
+      The default dev flow stored the KEK in a 0600 file under .dev/, owned by the OS user any
+      coding agent runs as, so an agent with file access could read the key that decrypts every
+      local folder.
+    severity: high
+    status: mitigated
+    mitigation: >-
+      The default dev flow keeps the KEK in the macOS Keychain with an ACL restricted to the sidecar
+      binary, or in the containerised OpenBao dev instance on Linux; a plaintext file survives only
+      behind SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 with a permission check and a loud warning. A
+      separate-user local mode mirrors the deployment isolation. See safekeys/dev-key-custody.
 
 assumptions:
   - MVP is software-only and already satisfies "models never see secrets" without custom silicon.

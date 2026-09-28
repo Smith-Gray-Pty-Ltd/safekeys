@@ -636,6 +636,52 @@ _Spec file: `.usm-workspace/tests/features/encrypted-folder.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
 
+## safekeys/dev-key-custody [planned]
+
+### From flows:
+
+- **dev-kek-in-keychain**: Dev KEK lives in the macOS Keychain
+  - setup → `scripts/dev-up.sh creates or reuses a Keychain item whose ACL grants only the sidecar binary.`
+  - receive → `The sidecar reads the KEK from the Keychain at startup; no plaintext KEK file exists on disk.`
+  - observe → `A same-user process other than the sidecar reading the item triggers a user-visible ACL prompt or denial.`
+  - observe → `.dev/ contains no KEK file and the sidecar resolves normally.`
+- **dev-kek-in-openbao**: Dev KEK lives in the dev OpenBao instance
+  - setup → `The dev Compose stack runs OpenBao in a container under its own user, as it already does.`
+  - receive → `The sidecar uses Vault transit by default on Linux; the KEK never exists as a file the agent user can read.`
+  - observe → `No KEK file appears in .dev/ or the home directory.`
+- **insecure-file-opt-in**: Plaintext key file is an explicit, loud opt-in
+  - receive → `SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 is the only way the local file keystore activates.`
+  - validate → `The sidecar refuses to start when the key file is group- or world-readable.`
+  - observe → `Startup prints a loud warning that the mode is not for real secrets.`
+  - observe → `Documentation marks the mode as not for real secrets.`
+- **separate-user-local-mode**: Separate-user local mode with peer-credential checks
+  - setup → `A documented script creates a dedicated sidecar user and an agent group; the sidecar runs as the dedicated user.`
+  - validate → `The sidecar checks the peer credential (uid/gid) of every socket connection, not only filesystem permissions.`
+  - observe → `An agent in the group resolves; a process outside the group is denied even if socket permissions change.`
+
+### From tests:
+
+- **default-dev-leaves-no-kek-file** (type: assertion)
+  - setup: command = scripts/dev-up.sh
+  - setup: platform = macos
+  - assert: assertion: no KEK file readable by the agent user exists at .dev/kek or ~/.safekeys/kek
+  - assert: assertion: the sidecar resolves a token successfully
+- **insecure-file-refuses-loose-perms** (type: assertion)
+  - setup: keyfile_mode = 0644
+  - assert: assertion: the sidecar exits with an error and serves nothing
+- **insecure-file-warns-loudly** (type: assertion)
+  - setup: keyfile_mode = 0600
+  - setup: opt_in = true
+  - assert: assertion: the startup log contains the not-for-real-secrets warning
+  - assert: assertion: resolution works
+- **separate-user-denies-outsider** (type: assertion)
+  - setup: agent_user = in-group
+  - setup: other_user = out-group
+  - assert: assertion: the agent user in the group can connect and resolve
+  - assert: assertion: a user outside the group is denied even if socket permissions are relaxed
+
+_Spec file: `.usm-workspace/tests/features/dev-key-custody.spec.ts`_
+
 ## safekeys/exec-wrapper [built]
 
 ### From flows:
@@ -663,6 +709,78 @@ _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
   - assert: assertion: process arguments contain the token but not the value
 
 _Spec file: `.usm-workspace/tests/features/exec-wrapper.spec.ts`_
+
+## safekeys/output-control [planned]
+
+### From flows:
+
+- **redact-relayed-output**: Redact the resolved value out of relayed output
+  - receive → `The sidecar resolves a token and injects the value into a command.`
+  - validate → `Before returning captured stdout/stderr, the sidecar scans for the value and any substring of it of 8+ characters (or the full value when shorter) in raw, base64, base64url, hex, percent-encoded, and JSON-escaped form, split across adjacent lines or chunks included.`
+  - send → `Each match is replaced with [REDACTED:safekeys] before the output leaves the sidecar.`
+  - record → `A redaction event is appended to the audit log carrying counts, not values.`
+- **status-only-by-default**: Return status-only output by default
+  - receive → `An MCP resolve_for_tool call completes.`
+  - observe → `The tool result carries the exit code and redacted output capped at 4 KiB.`
+  - validate → `Uncapped output is returned only when policy explicitly allows it for that token's scope and object.`
+  - observe → `The tool description tells the model output is redacted and size-capped.`
+- **command-allowlist**: Require an allowlist for MCP-initiated resolves
+  - setup → `An operator rule binds allowed command specifications — executable path plus argument patterns — to an object and scope.`
+  - validate → `At resolve, a request carrying an MCP origin must match a specification; when no allowlist governs the token and scope, MCP-initiated resolves are refused with an error telling the operator to add one.`
+  - record → `The denial names the rule and carries no value.`
+- **backstop-denylist**: Refuse known dumpers for CLI and SDK resolves without an allowlist
+  - receive → `A CLI or SDK resolve arrives with no command allowlist governing it.`
+  - validate → `The sidecar refuses env, printenv, set, export, cat, head, tail, less, more, echo, printf, tee, cp, mv, dd, base64, xxd, od, hexdump, strings, and any interpreter invoked with an inline-code flag — sh, bash, zsh, fish -c; python, python3 -c; node -e or --eval; perl -e; ruby -e; php -r; awk; osascript -e.`
+  - record → `The refusal is audited with a reason and no value.`
+  - observe → `Documentation states the denylist is a backstop; the controls are the allowlist and redaction.`
+
+### From tests:
+
+- **printenv-env-echo-leak-nothing** (type: assertion)
+  - setup: attempts = ["printenv SAFEKEYS_SECRET","env","echo $SAFEKEYS_SECRET","cat injected-file"]
+  - setup: secret_value = redteam-canary-value
+  - assert: assertion: the tool result contains no raw or encoded form of the secret
+  - assert: assertion: matches are replaced with [REDACTED:safekeys]
+  - assert: assertion: an audit record for the redaction exists and contains no value
+- **encoded-forms-redacted** (type: assertion)
+  - setup: attempts = ["base64 of env value with fold wrapping","xxd hex dump","python urllib quote","python json dumps"]
+  - assert: assertion: base64, base64url, hex, percent-encoded, and JSON-escaped renderings are all redacted
+  - assert: assertion: base64 wrapped across lines is redacted
+- **split-across-chunks-redacted** (type: assertion)
+  - setup: attempts = ["command writes half the value to stdout and half to stderr","command writes the value in two chunks with a delay"]
+  - assert: assertion: the value split across adjacent output chunks is detected and redacted
+- **partial-leak-redacted** (type: assertion)
+  - setup: attempts = ["cut -c1-20 of the env value"]
+  - assert: assertion: a partial echo of the first 20 characters is redacted
+  - assert: assertion: substrings shorter than 8 characters are not treated as matches
+- **disallowed-command-refused** (type: assertion)
+  - setup: allowlist = ["/usr/bin/curl https://api.example.com/*"]
+  - setup: requested = /bin/cat /etc/passwd
+  - assert: assertion: the resolve is denied
+  - assert: assertion: the denial names the rule
+  - assert: assertion: no unwrap occurs
+- **mcp-without-allowlist-refused** (type: assertion)
+  - setup: allowlist = null
+  - setup: origin = mcp
+  - setup: requested = /usr/bin/curl https://api.example.com/
+  - assert: assertion: the MCP resolve is refused
+  - assert: assertion: the error tells the operator to add a command allowlist
+- **dumper-backstop-refused** (type: assertion)
+  - setup: allowlist = null
+  - setup: attempts = ["env","printenv SAFEKEYS_SECRET","base64 <<< $SAFEKEYS_SECRET","xxd","od","hexdump","strings /dev/stdin","python3 -c 'import os;print(os.environ[\"SAFEKEYS_SECRET\"])'","node -e 'console.log(process.env.SAFEKEYS_SECRET)'","awk 'BEGIN{print ENVIRON[\"SAFEKEYS_SECRET\"]}'","osascript -e 'system info'"]
+  - setup: origin = cli
+  - assert: assertion: every listed dumper is refused
+  - assert: assertion: the refusal is audited with a reason and no value
+- **full-output-requires-policy** (type: assertion)
+  - setup: output_size = 64KiB
+  - assert: assertion: default output is capped at 4 KiB
+  - assert: assertion: policy-allowed output is uncapped but still redacted
+- **redteam-script-clean** (type: assertion)
+  - setup: script = scripts/redteam-mcp.sh
+  - assert: assertion: no known leak attempt returns the secret in any encoding
+  - assert: assertion: every denial and redaction appears in the audit log without values
+
+_Spec file: `.usm-workspace/tests/features/output-control.spec.ts`_
 
 ## safekeys/secret-injection [built]
 
@@ -753,5 +871,6 @@ _Spec file: `.usm-workspace/tests/features/secret-injection.spec.ts`_
   - assert: assertion: the agent can only request resolution via the token it holds
   - assert: assertion: injected values are not readable back through the sidecar
   - assert: assertion: no long-term key material is reachable from the agent's process
+  - assert: assertion: command output relayed through the sidecar carries no resolved value in raw or encoded form
 
 _Spec file: `.usm-workspace/tests/features/sidecar-resolution.spec.ts`_
