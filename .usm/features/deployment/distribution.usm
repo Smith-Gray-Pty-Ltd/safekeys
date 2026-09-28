@@ -20,7 +20,7 @@ intent: >-
   unclaimed, unprepared, or — in one case — squatted by a third party. Reserving the official and
   defensive names and building a gated, provenance-carrying release pipeline is what lets 0.1.0 ship
   without a rename later and without shipping under an impersonatable identity.
-status: planned
+status: built
 flows:
   - id: tag-triggered-release
     name: Tag-triggered release pipeline
@@ -42,7 +42,9 @@ flows:
           Homebrew formula updated.
       - action: observe
         id: s4
-        target: Nothing ships without James's environment approval; every artefact carries a digest or provenance record.
+        target: >-
+          Nothing ships without James's environment approval; every artefact carries a digest or
+          provenance record.
   - id: reserve-names
     name: Reserve the defensive names
     steps:
@@ -90,12 +92,14 @@ contracts:
       - >-
         The CLI meta package @smithgray/safekeys-cli resolves the prebuilt binary through
         optionalDependencies on per-platform packages (@smithgray/safekeys-cli-darwin-arm64,
-        -darwin-x64, -linux-x64, -linux-arm64, -win32-x64 as applicable) — the esbuild pattern:
-        no download at install time and no lifecycle scripts
+        -darwin-x64, -linux-x64, -linux-arm64, -win32-x64 as applicable) — the esbuild pattern: no
+        download at install time and no lifecycle scripts
       - >-
         Unscoped npm safekeys-mcp and safekeys-cli exist as 0.0.1 placeholders with no code and no
         install scripts
-      - PyPI safekeys is the real SDK; safekeys-mcp and safe-keys are 0.0.1 placeholders pointing at safekeys
+      - >-
+        PyPI safekeys is the real SDK; safekeys-mcp and safe-keys are 0.0.1 placeholders pointing at
+        safekeys
       - >-
         Docker images publish as safekeys/sidecar and safekeys/control-plane with
         ghcr.io/smith-gray-pty-ltd/safekeys-* as the canonical mirror
@@ -171,19 +175,23 @@ tests:
   - contracts:
       - official-names-only
     expect:
-      - assertion: no package.json, pyproject.toml, or doc names the unscoped npm safekeys package as an install target
+      - assertion: >-
+          no package.json, pyproject.toml, or doc names the unscoped npm safekeys package as an
+          install target
       - assertion: placeholder packages pack cleanly with no code
     flow: reserve-names
     id: placeholder-packages-pack-clean
     setup:
       packages:
-        - 'npm: safekeys-mcp, safekeys-cli'
-        - 'pypi: safekeys-mcp, safe-keys'
-        - 'crates: safekeys'
+        - "npm: safekeys-mcp, safekeys-cli"
+        - "pypi: safekeys-mcp, safe-keys"
+        - "crates: safekeys"
   - contracts:
       - official-names-only
     expect:
-      - assertion: the meta package resolves the platform binary through optionalDependencies with no lifecycle script
+      - assertion: >-
+          the meta package resolves the platform binary through optionalDependencies with no
+          lifecycle script
       - assertion: a wrong-platform resolution fails loudly rather than falling back to a download
     flow: verify-install
     id: cli-meta-resolves-platform-binary
@@ -194,7 +202,9 @@ tests:
     expect:
       - assertion: the release workflow passes in dry-run mode on a test tag
       - assertion: no publish job runs outside the release environment
-      - assertion: no long-lived registry token is stored in repo secrets except the scoped Docker Hub token in the release environment
+      - assertion: >-
+          no long-lived registry token is stored in repo secrets except the scoped Docker Hub token
+          in the release environment
     flow: tag-triggered-release
     id: pipeline-dry-run-green
     setup:
@@ -221,7 +231,9 @@ tests:
   - contracts:
       - verify-your-install
     expect:
-      - assertion: the documented cosign command pins the repo's workflow identity and verifies a published image
+      - assertion: >-
+          the documented cosign command pins the repo's workflow identity and verifies a published
+          image
       - assertion: npm audit signatures confirm provenance for a published package
       - assertion: sha256 checksums match a downloaded release binary
     flow: verify-install
@@ -230,7 +242,9 @@ tests:
       doc: SECURITY.md + docs security page
 decisions:
   - id: esbuild-pattern-for-cli
-    decision: Distribute the CLI as @smithgray/safekeys-cli with optionalDependencies on per-platform packages containing the prebuilt binary.
+    decision: >-
+      Distribute the CLI as @smithgray/safekeys-cli with optionalDependencies on per-platform
+      packages containing the prebuilt binary.
     rationale: |-
       No download at install time, no lifecycle scripts, checksummed by the npm registry itself,
       and npm installs exactly the one platform package the host needs. This is the pattern esbuild
@@ -243,14 +257,18 @@ decisions:
     status: accepted
     date: "2026-09-28"
   - id: ghcr-canonical-dockerhub-mirror
-    decision: Publish images to ghcr.io/smith-gray-pty-ltd as canonical and Docker Hub org safekeys as a mirror.
+    decision: >-
+      Publish images to ghcr.io/smith-gray-pty-ltd as canonical and Docker Hub org safekeys as a
+      mirror.
     rationale: |-
       GHCR requires no additional credential (GITHUB_TOKEN suffices) and keeps the image next to the
       code and its provenance; Docker Hub is where operators search. Deployments pin GHCR digests.
     status: accepted
     date: "2026-09-28"
   - id: no-agent-publishes
-    decision: Every first publish and every account/org creation is performed by James; agents prepare packages, workflows, and the runbook only.
+    decision: >-
+      Every first publish and every account/org creation is performed by James; agents prepare
+      packages, workflows, and the runbook only.
     rationale: |-
       First publishes create registry identities that cannot be renamed, and account creation is a
       human act of authority. The pipeline is gated on a release environment with a required human
@@ -258,9 +276,9 @@ decisions:
     status: accepted
     date: "2026-09-28"
 implementation:
-  primary: scripts/release.sh
+  primary: .github/workflows/release.yml
   test_code: packages/cli/test/resolve.test.mjs
-  test_code_status: none
+  test_code_status: manual
 see_also:
   - safekeys/output-control
   - safekeys/deployment-packaging

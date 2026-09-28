@@ -194,7 +194,7 @@ _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
 
-## safekeys/distribution [planned]
+## safekeys/distribution [built]
 
 ### From flows:
 
