@@ -39,6 +39,9 @@ build:
 test:
 	$(GO) test ./...
 
+sdk-build:
+	cd packages/sdk-python && python3 -m build --outdir dist/
+
 test-all: test sdk-test
 	cd packages/mcp-server && npm test
 

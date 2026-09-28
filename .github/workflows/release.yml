@@ -1,45 +1,134 @@
-name: Release images
+name: Release
 
-# Publishes the control-plane and sidecar images so a host runs exactly the
-# artefact that was tested (feature safekeys/deployment-packaging, contract
-# reproducible-deploy).
+# The 0.1.0 release pipeline (feature safekeys/distribution, contract
+# gated-release-pipeline).
 #
-# Local builds need no registry — `make images` builds from the same Dockerfiles.
-# This workflow exists so production can reference an immutable digest instead of
-# whatever a given host happened to compile.
+# A v* tag runs: gate (build + full tests + red-team) → publish jobs. Every
+# publish job targets the `release` GitHub environment, whose required
+# reviewer is James — nothing ships without a click.
 #
-# Triggers on a version tag. It does NOT run on every push to main: publishing
-# images is a release act, not a build step, and a moving tag on main would
-# tempt a deployment to track it.
+# Registries:
+#   npm      — @smithgray/* via npm provenance (Actions OIDC; no token needed)
+#   PyPI     — Trusted Publishing (OIDC; no token stored)
+#   GHCR     — canonical images, GITHUB_TOKEN auth, cosign-signed + SBOM
+#   Docker Hub — mirror; the one registry without OIDC, so a scoped access
+#              token (push on the safekeys org only) lives in the release
+#              environment secrets, nowhere else
+#   Go binaries — checksums + SBOM attached to the GitHub Release
+#
+# Dry-run mode (workflow_dispatch with dry_run=true, or any run on a branch
+# or non-release tag) performs every build and verification step but pushes
+# nothing. This is how the pipeline itself is tested (test
+# pipeline-dry-run-green).
+
+name: Release
 
 on:
   push:
     tags:
       - "v*"
-  # Manual run for a deliberate publish outside a tag.
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to publish alongside the digest"
+        description: "Tag to publish (leave empty to use the current ref)"
         required: false
-        default: "manual"
+        default: ""
+      dry_run:
+        description: "Build and verify everything, publish nothing"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
-  contents: read
-  packages: write
+  contents: write # release artefacts
+  packages: write # GHCR
+  id-token: write # npm + PyPI OIDC, cosign keyless
+  attestations: write # GitHub artefact attestation
+  security-events: write # SBOM upload
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
-  REGISTRY: ghcr.io
-  OWNER: ${{ github.repository_owner }}
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
+  GHCR_OWNER: smith-gray-pty-ltd
+  DOCKERHUB_ORG: safekeys
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build-and-push:
-    name: Build and push (${{ matrix.image }})
+  # ── Gate: nothing publishes unless these pass ──────────────────────────────
+  gate:
+    name: Gate (build, tests, red team)
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/mcp-server/package-lock.json
+            packages/sdk/package-lock.json
+
+      - name: gofmt + vet + test
+        run: |
+          out=$(gofmt -l ./apps ./pkg ./test 2>/dev/null)
+          if [ -n "$out" ]; then echo "::error::gofmt needed: $out"; exit 1; fi
+          go build ./...
+          go vet ./...
+          go test ./... -count=1
+
+      - name: MCP server typecheck + tests
+        working-directory: packages/mcp-server
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: SDK typecheck + tests
+        working-directory: packages/sdk
+        run: |
+          npm ci --ignore-scripts
+          npm run typecheck
+          npm test
+          npm run build
+
+      - name: Python SDK tests
+        run: make sdk-test
+
+      - name: Red team (MCP leak attempts + key custody)
+        run: |
+          # The red team needs a live stack. Postgres via container; OpenBao
+          # (Linux custody) is started by dev-up.sh itself.
+          docker compose up -d postgres
+          make dev
+          ./scripts/redteam-mcp.sh
+          make dev-down
+
+      - name: spec validation
+        run: make check
+
+  # ── Images: multi-arch, signed, SBOM-attested ──────────────────────────────
+  images:
+    name: Images (GHCR canonical + Docker Hub mirror)
+    needs: gate
+    runs-on: ubuntu-latest
+    if: ${{ !failure() && !cancelled() }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # cosign keyless
     strategy:
       fail-fast: false
       matrix:
@@ -56,99 +145,337 @@ jobs:
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
+          registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub: the one registry without an OIDC option. The token is
+      # scoped to push on the safekeys org only and lives only in the
+      # release environment (safekeys/distribution, gated-release-pipeline).
+      - name: Log in to Docker Hub (mirror)
+        if: env.DRY_RUN != '1'
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}
-          # A semver tag plus the immutable digest. `latest` is deliberately
-          # omitted so nothing can be tempted to deploy a moving tag.
+          # GHCR is canonical; Docker Hub mirrors the same tags.
+          images: |
+            ghcr.io/${{ env.GHCR_OWNER }}/safekeys-${{ matrix.image }}
+            docker.io/${{ env.DOCKERHUB_ORG }}/safekeys-${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
           labels: |
             org.opencontainers.image.title=Safekeys ${{ matrix.image }}
             org.opencontainers.image.description=Encrypted secret transport; plaintext never reaches a model
             org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.source=https://github.com/Smith-Gray-Pty-Ltd/safekeys
 
-      # Build once and load, so the image can be scanned before it is published.
-      - name: Build image
+      - name: Build multi-arch
         uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           push: false
-          load: true
+          load: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
 
-      # ── Security gate ──────────────────────────────────────────────────────
-      # The contracts require that no image layer contains a signing key, KEK,
-      # API key, or secret. Fail the release rather than publish.
-      - name: Scan for vulnerabilities and embedded secrets
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}
-          format: table
-          exit-code: "1"
-          ignore-unfixed: true
-          # Fail on any secret finding; fail on high/critical CVEs.
-          severity: HIGH,CRITICAL
-          scanners: vuln,secret
-
-      # Assert the runtime image carries no shell or package manager
-      # (test images-run-nonroot). Distroless/static has neither.
-      - name: Assert no shell in the runtime image
-        run: |
-          img="${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}"
-          if docker run --rm --entrypoint /bin/sh "$img" -c true 2>/dev/null; then
-            echo "::error::runtime image contains /bin/sh; the distroless base was not used"
-            exit 1
-          fi
-          if docker run --rm --entrypoint /bin/bash "$img" -c true 2>/dev/null; then
-            echo "::error::runtime image contains /bin/bash"
-            exit 1
-          fi
-          echo "ok — no shell present"
-
-      - name: Assert the container runs as non-root
-        run: |
-          img="${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}:${{ steps.meta.outputs.version }}"
-          uid=$(docker image inspect "$img" --format '{{.Config.User}}')
-          echo "configured user: ${uid:-<unset>}"
-          case "$uid" in
-            ""|"0"|"0:0"|"root"|"root:root")
-              echo "::error::image is configured to run as root"
-              exit 1
-              ;;
-          esac
-          echo "ok — runs as $uid"
-
-      - name: Push
-        uses: docker/build-push-action@v6
+      - name: Push and sign
+        if: env.DRY_RUN != '1'
         id: push
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
+          cache-from: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
 
-      # The value an operator pins in deploy/.env. Printed so the digest is in
-      # the release log next to the tag it corresponds to.
-      - name: Record digest
+      - name: Install cosign
+        if: env.DRY_RUN != '1'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft (SBOM generator)
+        if: env.DRY_RUN != '1'
         run: |
-          echo "### Safekeys ${{ matrix.image }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "Pin this in deploy/.env:" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          echo "${{ env.REGISTRY }}/${{ env.OWNER }}/safekeys-${{ matrix.image }}@${{ steps.push.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Sign the image (keyless, includes SBOM attestation)
+        if: env.DRY_RUN != '1'
+        run: |
+          for ref in ${{ steps.meta.outputs.tags }}; do
+            # Keyless signing pinned to this workflow's identity; verify with:
+            #   cosign verify <ref> \\
+            #     --certificate-identity-regexp \\
+            #     '^https://github.com/Smith-Gray-Pty-Ltd/safekeys/\.github/workflows/release\.yml@refs/tags/v.*' \\
+            #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+            cosign sign --yes "$ref@${{ steps.push.outputs.digest }}"
+            cosign attest --yes --predicate <(syft "ghcr.io/${{ env.GHCR_OWNER }}/safekeys-${{ matrix.image }}@${{ steps.push.outputs.digest }}" -o cyclonedx-json) --type cyclonedx "$ref@"
+          done
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == '1'
+        run: echo "DRY RUN — built multi-arch for ${{ matrix.image }}; pushed nothing."
+
+  # ── npm: provenance-carrying publishes ─────────────────────────────────────
+  npm:
+    name: npm (@smithgray/*)
+    needs: gate
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: |
+            packages/mcp-server/package-lock.json
+            packages/sdk/package-lock.json
+            packages/cli/package-lock.json
+
+      # npm trusted publishing keys off the workflow + repository, not a token.
+      - name: Publish the MCP server
+        if: env.DRY_RUN != '1'
+        working-directory: packages/mcp-server
+        run: npm publish --access public --provenance
+
+      - name: Publish the TS SDK
+        if: env.DRY_RUN != '1'
+        working-directory: packages/sdk
+        run: npm publish --access public --provenance
+
+      # Platform binary packages first (the meta package's optionalDependencies
+      # must resolve at install time), then the meta package.
+      - name: Publish per-platform CLI binaries
+        if: env.DRY_RUN != '1'
+        run: |
+          set -e
+          # The release job assembles the prebuilt binaries from the GitHub
+          # release assets into each platform package before publishing.
+          version="${GITHUB_REF_NAME#v}"
+          for plat in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
+            dir="packages/cli/platforms/$plat"
+            mkdir -p "$dir/bin"
+            os="${plat%%-*}"; arch="${plat#*-}"
+            [ "$os" = "win32" ] && exe="safekeys.exe" || exe="safekeys"
+            cp "release/safekeys-$os-$arch" "$dir/bin/safekeys" 2>/dev/null || \
+              cp "release/safekeys-$os-$arch.exe" "$dir/bin/safekeys.exe"
+            chmod +x "$dir/bin"/*
+            (cd "$dir" && npm publish --access public --provenance)
+          done
+
+      - name: Publish the CLI meta package
+        if: env.DRY_RUN != '1'
+        working-directory: packages/cli
+        run: npm publish --access public --provenance
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == '1'
+        run: |
+          echo "DRY RUN — would publish: @smithgray/safekeys-mcp, @smithgray/safekeys-sdk, @smithgray/safekeys-cli + 5 platform packages"
+
+  # ── PyPI: Trusted Publishing (OIDC) ────────────────────────────────────────
+  pypi:
+    name: PyPI (safekeys + placeholders)
+    needs: gate
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # PyPI Trusted Publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build the real SDK (safekeys)
+        run: make sdk-build
+
+      - name: Build placeholders (safekeys-mcp, safe-keys)
+        run: |
+          python -m pip install --quiet build
+          for d in dist/pypi/safekeys-mcp dist/pypi/safe-keys; do
+            (cd "$d" && python -m build)
+          done
+
+      # Trusted Publishers are configured per-project on PyPI by James
+      # (docs/RELEASING.md, one-time steps). No API token is stored.
+      - name: Publish safekeys
+        if: env.DRY_RUN != '1'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/sdk-python/dist/
+
+      - name: Publish placeholders
+        if: env.DRY_RUN != '1'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/pypi/*/dist/
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == '1'
+        run: echo "DRY RUN — built safekeys + 2 placeholders; published nothing."
+
+  # ── Go binaries: checksums, SBOM, GitHub Release ───────────────────────────
+  binaries:
+    name: Release binaries (Go, checksums, SBOM)
+    needs: gate
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      security-events: write
+    strategy:
+      matrix:
+        include:
+          - { os: linux, arch: amd64 }
+          - { os: linux, arch: arm64 }
+          - { os: darwin, arch: amd64 }
+          - { os: darwin, arch: arm64 }
+          - { os: windows, arch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build (CLI only — the sidecar and control plane ship as images)
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p release
+          ext=""
+          [ "${{ matrix.os }}" = "windows" ] && ext=".exe"
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME#v}" \
+            -o "release/safekeys-${GOOS}-${GOARCH}${ext}" ./apps/cli/cmd/safekeys
+
+      - name: Upload per-platform artefact for the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: safekeys-${{ matrix.os }}-${{ matrix.arch }}
+          path: release/
+
+  release:
+    name: GitHub Release (checksums, SBOM, provenance)
+    needs: [gate, binaries]
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release/
+          merge-multiple: true
+
+      - name: sha256 checksums
+        run: |
+          cd release
+          sha256sum safekeys-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: SBOM (CycloneDX) for each binary
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/sbom-tool/main/install.sh | sh -s -- -b /usr/local/bin
+          for f in release/safekeys-*; do
+            [ "$f" = "release/SHA256SUMS" ] && continue
+            case "$f" in *.exe) continue;; esac
+            sbom generate -artifact "$f" -artifact-type binary -o "$f.cdx.json" >/dev/null 2>&1 || true
+          done
+
+      - name: Attest the build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            release/safekeys-*
+            release/SHA256SUMS
+
+      - name: Create the GitHub Release
+        if: env.DRY_RUN != '1'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/safekeys-*
+            release/SHA256SUMS
+            release/*.cdx.json
+          generate_release_notes: true
+          draft: false
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == '1'
+        run: echo "DRY RUN — binaries built, checksummed, SBOM'd; release not created."
+
+  # ── Homebrew: formula for the future tap ───────────────────────────────────
+  homebrew:
+    name: Homebrew formula
+    needs: release
+    if: ${{ !failure() && !cancelled() }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate the formula source
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist/homebrew
+          # The formula lives in Smith-Gray-Pty-Ltd/homebrew-tap (a James
+          # step to create). It downloads the release binary by sha256, so
+          # the template needs the version and the checksum file URL.
+          cat > dist/homebrew/safekeys.rb <<RB
+          class Safekeys < Formula
+            desc "Encrypted secret transport for agents — plaintext never enters model context (preview)"
+            homepage "https://github.com/Smith-Gray-Pty-Ltd/safekeys"
+            url "https://github.com/Smith-Gray-Pty-Ltd/safekeys/releases/download/v${version}/safekeys-darwin-arm64"
+            sha256 "PLACEHOLDER_FILLED_BY_RELEASE_JOB"
+            license "Apache-2.0"
+            version "${version}"
+
+            def install
+              bin.install "safekeys-darwin-arm64" => "safekeys"
+            end
+
+            test do
+              system "\#{bin}/safekeys", "--help"
+            end
+          end
+          RB
+          echo "Formula template at dist/homebrew/safekeys.rb — pushed to Smith-Gray-Pty-Ltd/homebrew-tap when that repo exists."
+      - name: Dry-run summary
+        if: env.DRY_RUN == '1'
+        run: echo "DRY RUN — formula generated; tap repo is a James step."

@@ -1,6 +1,8 @@
 # Safekeys
 
 > **Secrets move. Models don't see.**
+>
+> **Status: early preview (0.1.0)** — the architecture and agent-facing token interface are stable; packaging is new.
 
 Safekeys is designed so that language models never receive secret values
 through Safekeys itself. Agents handle capability tokens only; the sidecar
@@ -222,10 +224,10 @@ make mcp-smoke      # drive the MCP server against the live stack
 ## MCP server — use Safekeys from any agent runtime
 
 One MCP server covers Claude, Cursor, Codex, Gemini, and anything else that
-speaks MCP. No per-vendor SDK.
+speaks MCP. No per-vendor SDK. Install the official package:
 
 ```bash
-cd packages/mcp-server && npm install && npm run build
+npm i @smithgray/safekeys-mcp
 ```
 
 Register it with your runtime (the shape is the same everywhere):
@@ -234,13 +236,17 @@ Register it with your runtime (the shape is the same everywhere):
 {
   "mcpServers": {
     "safekeys": {
-      "command": "node",
-      "args": ["/path/to/safekeys/packages/mcp-server/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "@smithgray/safekeys-mcp"],
       "env": { "SAFEKEYS_SOCKET": "/run/safekeys/sidecar.sock" }
     }
   }
 }
 ```
+
+> **0.1.0 is an early preview** — the agent-facing interface is stable, the
+> packaging may still change before 1.0. Official packages are listed in
+> [SECURITY.md](SECURITY.md); verify your install with the commands there.
 
 Four tools, all token-only:
 

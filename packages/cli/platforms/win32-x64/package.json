@@ -1,0 +1,26 @@
+{
+  "name": "@smithgray/safekeys-cli-win32-x64",
+  "version": "0.1.0",
+  "description": "Safekeys CLI binary for win32-x64. Installed automatically as an optional dependency of @smithgray/safekeys-cli. (early preview)",
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Smith-Gray-Pty-Ltd/safekeys.git",
+    "directory": "packages/cli/platforms/win32-x64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

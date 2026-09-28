@@ -7,6 +7,11 @@
 
 Safekeys.ai Site — the public marketing and documentation presence at safekeys.ai, explaining the encrypted transport model, the open protocol, and the "Secrets move. Models don't see." positioning. It is the adoption front door for the open core.
 
+TODO (post-0.1.0, vanity Go module path): serve a go-import meta tag at
+safekeys.ai/go so Go installs can read `go install safekeys.ai/go/cmd/safekeys`.
+Do NOT switch the module path until the site is live and serving that path;
+the module remains github.com/Smith-Gray-Pty-Ltd/safekeys for 0.1.0.
+
 
 ## Tech Stack
 

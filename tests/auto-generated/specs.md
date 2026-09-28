@@ -194,6 +194,56 @@ _Spec file: `.usm-workspace/tests/features/policy-engine.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/deployment-packaging.spec.ts`_
 
+## safekeys/distribution [planned]
+
+### From flows:
+
+- **tag-triggered-release**: Tag-triggered release pipeline
+  - receive → `A v* tag is pushed.`
+  - validate → `Build, full test suite, and the red-team job run first; any failure stops the release before a publish job starts.`
+  - send → `Publish jobs run against the release environment: npm with provenance (the meta package and every per-platform binary package), PyPI via Trusted Publishing, images signed and attested to GHCR and Docker Hub, binaries and checksums and SBOM attached to the Release, Homebrew formula updated.`
+  - observe → `Nothing ships without James's environment approval; every artefact carries a digest or provenance record.`
+- **reserve-names**: Reserve the defensive names
+  - setup → `Placeholder packages are prepared: npm safekeys-mcp and safekeys-cli (0.0.1, README only), PyPI safekeys-mcp and safe-keys (0.0.1, README only), crates.io safekeys (0.0.1, doc comment only).`
+  - observe → `Each placeholder packs cleanly with no code inside (npm pack --dry-run, python -m build, cargo package --list).`
+  - record → `James executes the one-time account and org creation steps from docs/RELEASING.md and performs every first publish himself.`
+- **verify-install**: Verify your install
+  - receive → `An operator has installed an artefact — an image, an npm package, or a release binary.`
+  - validate → `Container images verify with cosign keyless, pinned to the repo's workflow identity (https://github.com/Smith-Gray-Pty-Ltd/safekeys/.github/workflows/release.yml@refs/tags/v*); npm provenance verifies with npm audit signatures; release binaries verify against the sha256 checksums on the GitHub Release.`
+  - observe → `The verify commands are documented on the security page of the docs site and in SECURITY.md, and fail loudly when the identity or checksum does not match.`
+
+### From tests:
+
+- **placeholder-packages-pack-clean** (type: assertion)
+  - setup: packages = ["npm: safekeys-mcp, safekeys-cli","pypi: safekeys-mcp, safe-keys","crates: safekeys"]
+  - assert: assertion: no package.json, pyproject.toml, or doc names the unscoped npm safekeys package as an install target
+  - assert: assertion: placeholder packages pack cleanly with no code
+- **cli-meta-resolves-platform-binary** (type: assertion)
+  - setup: pattern = esbuild
+  - assert: assertion: the meta package resolves the platform binary through optionalDependencies with no lifecycle script
+  - assert: assertion: a wrong-platform resolution fails loudly rather than falling back to a download
+- **pipeline-dry-run-green** (type: assertion)
+  - setup: mode = dry-run
+  - setup: tag = v0.0.0-test
+  - assert: assertion: the release workflow passes in dry-run mode on a test tag
+  - assert: assertion: no publish job runs outside the release environment
+  - assert: assertion: no long-lived registry token is stored in repo secrets except the scoped Docker Hub token in the release environment
+- **runbook-lists-james-steps** (type: assertion)
+  - setup: doc = docs/RELEASING.md
+  - assert: assertion: docs/RELEASING.md contains the name table and the ordered one-time human steps
+  - assert: assertion: per-release steps are listed separately
+- **hygiene-checks-pass** (type: assertion)
+  - setup: static_check = true
+  - assert: assertion: no npm package declares a postinstall or any lifecycle script
+  - assert: assertion: versions align at 0.1.0 and CHANGELOG.md covers output-control and dev-key-custody
+- **verify-commands-documented-and-correct** (type: assertion)
+  - setup: doc = SECURITY.md + docs security page
+  - assert: assertion: the documented cosign command pins the repo's workflow identity and verifies a published image
+  - assert: assertion: npm audit signatures confirm provenance for a published package
+  - assert: assertion: sha256 checksums match a downloaded release binary
+
+_Spec file: `.usm-workspace/tests/features/distribution.spec.ts`_
+
 ## safekeys/docs-hosting [built]
 
 ### From flows:

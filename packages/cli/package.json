@@ -1,0 +1,44 @@
+{
+  "name": "@smithgray/safekeys-cli",
+  "version": "0.1.0",
+  "description": "Installer for the Safekeys CLI \u2014 resolves the prebuilt binary for your platform from @smithgray/safekeys-cli-<platform> packages. No download at install time, no install scripts. (early preview)",
+  "bin": {
+    "safekeys": "bin/cli.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "Apache-2.0",
+  "author": "Smith & Gray Pty Ltd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Smith-Gray-Pty-Ltd/safekeys.git",
+    "directory": "packages/cli"
+  },
+  "keywords": [
+    "secrets",
+    "cli",
+    "agents",
+    "llm"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "@smithgray/safekeys-cli-darwin-arm64": "0.1.0",
+    "@smithgray/safekeys-cli-darwin-x64": "0.1.0",
+    "@smithgray/safekeys-cli-linux-x64": "0.1.0",
+    "@smithgray/safekeys-cli-linux-arm64": "0.1.0",
+    "@smithgray/safekeys-cli-win32-x64": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

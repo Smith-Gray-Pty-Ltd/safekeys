@@ -1,0 +1,26 @@
+{
+  "name": "@smithgray/safekeys-cli-linux-arm64",
+  "version": "0.1.0",
+  "description": "Safekeys CLI binary for linux-arm64. Installed automatically as an optional dependency of @smithgray/safekeys-cli. (early preview)",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Smith-Gray-Pty-Ltd/safekeys.git",
+    "directory": "packages/cli/platforms/linux-arm64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

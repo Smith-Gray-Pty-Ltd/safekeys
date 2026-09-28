@@ -588,6 +588,18 @@ reference_pages:
               identifiers and outcomes only — stealing the whole log yields no secrets.
       - type: heading
         level: 2
+        text: Verify your install
+      - type: steps
+        items:
+          - text: >-
+              Container images: cosign verify --certificate-identity-regexp
+              '^https://github.com/Smith-Gray-Pty-Ltd/safekeys/\.github/workflows/release\.yml@refs/tags/v.*'
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com ghcr.io/smith-gray-pty-ltd/safekeys-sidecar@sha256:<digest>
+              (the same command verifies the Docker Hub mirror with its image name).
+          - text: npm packages — run npm audit signatures in any project that installed @smithgray/* packages; it confirms provenance from this repository's release workflow.
+          - text: Release binaries — download SHA256SUMS from the GitHub Release and run sha256sum --check --ignore-missing SHA256SUMS.
+      - type: heading
+        level: 2
         text: Limits
       - type: steps
         items:

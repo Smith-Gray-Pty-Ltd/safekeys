@@ -1,0 +1,46 @@
+{
+  "name": "@smithgray/safekeys-sdk",
+  "version": "0.1.0",
+  "description": "Token-only TypeScript SDK for Safekeys — agents handle capability tokens; the sidecar injects and redacts. Plaintext never enters model context. (early preview)",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "Apache-2.0",
+  "author": "Smith & Gray Pty Ltd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Smith-Gray-Pty-Ltd/safekeys.git",
+    "directory": "packages/sdk"
+  },
+  "keywords": [
+    "secrets",
+    "agents",
+    "llm",
+    "mcp",
+    "mastra",
+    "vercel-ai",
+    "openai"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
