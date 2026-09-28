@@ -156,23 +156,40 @@ func applyMigrations(ctx context.Context, db *sql.DB) error {
 
 // loadSigner builds the token signer.
 //
-// Development: a base64 Ed25519 seed in SAFEKEYS_DEV_SIGNING_KEY (or the file
-// named by SAFEKEYS_DEV_SIGNING_KEY_FILE, which is the production-shaped path
-// for delivering a root-owned credential).
-// Production: the key is provisioned into an HSM/secure element; only a handle
-// is present here (Phase 1 — see safekeys/hardware-root).
+// Custody ladder (safekeys/dev-key-custody), in order:
+//
+//  1. SAFEKEYS_DEV_SIGNING_KEY_FILE — a file credential (production-shaped).
+//  2. SAFEKEYS_DEV_SIGNING_KEY — the environment (development convenience).
+//  3. macOS Keychain (service "safekeys", account "dev-signing-key") — the
+//     dev default after scripts/migrate-dev-keys.sh has run; no plaintext
+//     seed file exists.
+//
+// Production provisions the key into an HSM/secure element; only a handle is
+// present here (Phase 1 — see safekeys/hardware-root).
 func loadSigner() (protocol.Signer, error) {
 	seedB64, src, err := credential.FromEnv("SAFEKEYS_DEV_SIGNING_KEY", "SAFEKEYS_DEV_SIGNING_KEY_FILE")
 	if err != nil {
 		return nil, err
 	}
 	if seedB64 == "" {
+		// No file, no environment: try the Keychain before failing.
+		if kcVal, ok, kcErr := credential.FromKeychain("safekeys", "dev-signing-key"); kcErr != nil {
+			return nil, kcErr
+		} else if ok {
+			seedB64, src = kcVal, credential.SourceKeychain
+		}
+	}
+	if seedB64 == "" {
 		return nil, errors.New(
-			"SAFEKEYS_DEV_SIGNING_KEY (or SAFEKEYS_DEV_SIGNING_KEY_FILE) is required in this build; " +
+			"no signing key found: set SAFEKEYS_DEV_SIGNING_KEY_FILE, SAFEKEYS_DEV_SIGNING_KEY, " +
+				"or run scripts/migrate-dev-keys.sh to store it in the macOS Keychain; " +
 				"production provisions the signing key into an HSM or secure element")
 	}
 	if src == credential.SourceEnv {
 		log.Println("control-plane: signing key loaded from the environment; prefer SAFEKEYS_DEV_SIGNING_KEY_FILE in production")
+	}
+	if src == credential.SourceKeychain {
+		log.Println("control-plane: signing key loaded from the macOS Keychain; no plaintext seed file exists")
 	}
 	seed, err := base64.RawStdEncoding.DecodeString(seedB64)
 	if err != nil {

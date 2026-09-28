@@ -18,7 +18,13 @@
 
 # Repository root, derived from this file's location. Works regardless of the
 # caller's working directory.
-SAFEKEYS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This file lives in scripts/lib/, so the repo root is TWO levels up from
+# here. (dirname of common.sh is scripts/lib; the repo root is its parent's
+# parent.) Deriving only one level up made SAFEKEYS_DEV_DIR scripts/.dev — a
+# second dev state directory the sidecar used while the CLI and demo scripts
+# used .dev/ at the repo root, so `make demo` could not find what the sidecar
+# wrote.
+SAFEKEYS_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SAFEKEYS_ROOT="$(cd "$SAFEKEYS_SCRIPTS_DIR/.." && pwd)"
 
 # Local development state: dev signing key, local KEK, ciphertext folders, logs.

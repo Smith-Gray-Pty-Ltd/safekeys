@@ -50,6 +50,10 @@ func setup(t *testing.T) (*httptest.Server, *store.Store) {
 	if _, err := db.ExecContext(ctx, store.Migrations); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
+	// 002: command allowlists (safekeys/output-control).
+	if _, err := db.ExecContext(ctx, store.Migrations002); err != nil {
+		t.Fatalf("migrations 002: %v", err)
+	}
 
 	st := store.New(db)
 	_, prv, _ := ed25519.GenerateKey(nil)

@@ -44,19 +44,6 @@ for b in safekeys safekeys-cp safekeys-sidecar; do
   fi
 done
 
-# ── Stable dev credentials ───────────────────────────────────────────────────
-# Generated once and reused, so restarts do not invalidate existing tokens.
-KEYFILE="$DEV/dev-signing-key"
-if [[ ! -f "$KEYFILE" ]]; then
-  python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())' > "$KEYFILE"
-  chmod 600 "$KEYFILE"
-  echo "generated a new development signing key at $KEYFILE"
-fi
-
-# Assign then export: combining them would mask a read failure (SC2155), and a
-# silently empty signing key would mint tokens with a known-weak key.
-SAFEKEYS_DEV_SIGNING_KEY="$(cat "$KEYFILE")"
-export SAFEKEYS_DEV_SIGNING_KEY
 export SAFEKEYS_KID="${SAFEKEYS_KID:-dev-key-1}"
 export DATABASE_URL="${DATABASE_URL:-postgres://safekeys:safekeys-dev-password@localhost:5432/safekeys?sslmode=disable}"
 export SAFEKEYS_ISSUER="${SAFEKEYS_ISSUER:-https://cp.safekeys.local}"
@@ -90,15 +77,28 @@ if [[ "$INSECURE_KEYFILE" == "1" ]]; then
   export SAFEKEYS_KEYCHAIN=0
   unset SAFEKEYS_VAULT_ADDR
 else
+  # Stale plaintext key material from the pre-custody flow must not sit
+  # readable while the opt-in is off (dev-key-custody, insecure-file-strict
+  # by implication: the default flow leaves no readable key file). Refuse and
+  # print the one-line fix.
+  for stale in "$SAFEKEYS_DEV_DIR/kek" "$SAFEKEYS_DEV_DIR/dev-signing-key"; do
+    if [[ -f "$stale" ]]; then
+      echo "refusing to start: stale plaintext key material at $stale" >&2
+      echo "run:  ./scripts/migrate-dev-keys.sh   # re-wraps objects and deletes it" >&2
+      echo "or:   export SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1  # keep the file (not for real secrets)" >&2
+      exit 1
+    fi
+  done
   # macOS default: Keychain custody. No plaintext file, no vault needed.
   if [[ "${SAFEKEYS_KEYCHAIN:-0}" == "1" ]]; then
     unset SAFEKEYS_VAULT_ADDR
     echo "KEK custody: macOS Keychain (ACL restricted to the sidecar binary)"
+    echo "Signing seed: macOS Keychain (migrated by scripts/migrate-dev-keys.sh)"
   else
     # Linux (or macOS with keychain disabled): the containerised dev OpenBao.
     export SAFEKEYS_VAULT_TOKEN="${SAFEKEYS_VAULT_TOKEN:-root}"
     if ! docker compose -f "$ROOT/docker-compose.yml" ps --status running --format '{{.Name}}' 2>/dev/null | grep -q openbao; then
-      echo "Starting the dev OpenBao (KEK custody; transit key is created once)…"
+      echo "Starting the dev OpenBao (key custody; transit key and signing seed are created once)…"
       docker compose -f "$ROOT/docker-compose.yml" up -d openbao openbao-init >/dev/null
       for _ in $(seq 1 60); do
         curl -sf -H "X-Vault-Token: root" "$SAFEKEYS_VAULT_ADDR/v1/sys/health" >/dev/null 2>&1 && break
@@ -107,7 +107,43 @@ else
       docker compose -f "$ROOT/docker-compose.yml" up openbao-init >/dev/null 2>&1 || true
     fi
     echo "KEK custody: OpenBao transit at $SAFEKEYS_VAULT_ADDR (key ${SAFEKEYS_VAULT_KID:-kek-1})"
+    # Signing seed: generated once into OpenBao KV and fetched from there at
+    # start — no plaintext seed file exists. It still travels through the
+    # process environment (readable via /proc by the same user), which is a
+    # documented dev-only limitation; production delivers it as a root-owned
+    # credential (deployment-packaging) and Phase 1 moves it into hardware.
+    if ! curl -sf -H "X-Vault-Token: $SAFEKEYS_VAULT_TOKEN" \
+        "$SAFEKEYS_VAULT_ADDR/v1/secret/data/safekeys/dev-signing-key" \
+        | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["data"]["seed"])' \
+        > /dev/null 2>&1; then
+      python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())' \
+        | curl -sf -X POST -H "X-Vault-Token: $SAFEKEYS_VAULT_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(python3 -c 'import json,sys;print(json.dumps({"data":{"seed":sys.stdin.read().strip()}}))')" \
+            "$SAFEKEYS_VAULT_ADDR/v1/secret/data/safekeys/dev-signing-key" >/dev/null
+      echo "generated a new development signing seed in OpenBao KV (secret/safekeys/dev-signing-key)"
+    fi
+    SAFEKEYS_DEV_SIGNING_KEY="$(curl -sf -H "X-Vault-Token: $SAFEKEYS_VAULT_TOKEN" \
+      "$SAFEKEYS_VAULT_ADDR/v1/secret/data/safekeys/dev-signing-key" \
+      | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["data"]["seed"])')"
+    export SAFEKEYS_DEV_SIGNING_KEY
   fi
+fi
+
+# ── Stable dev credentials ───────────────────────────────────────────────────
+# The signing seed is NOT written to a plaintext file: per dev-key-custody it
+# lives in the Keychain (macOS) after migration, or is supplied by the
+# environment for one-off bootstrap. A seed file is created only when the
+# operator has explicitly opted into insecure file mode.
+if [[ "$INSECURE_KEYFILE" == "1" ]]; then
+  KEYFILE="$DEV/dev-signing-key"
+  if [[ ! -f "$KEYFILE" ]]; then
+    python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())' > "$KEYFILE"
+    chmod 600 "$KEYFILE"
+    echo "generated a new development signing key at $KEYFILE"
+  fi
+  SAFEKEYS_DEV_SIGNING_KEY="$(cat "$KEYFILE")"
+  export SAFEKEYS_DEV_SIGNING_KEY
 fi
 
 mkdir -p "$(dirname "$SAFEKEYS_SOCKET")"

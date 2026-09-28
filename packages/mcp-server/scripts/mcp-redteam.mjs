@@ -23,7 +23,7 @@ import { writeFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 // The MCP server to probe: anchored here, so the script runs from anywhere.
 const serverPath = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
@@ -285,6 +285,67 @@ try {
   console.log("\n[7] transcript sweep");
   const full = attempts.join("\n");
   sweep(full, "model-visible transcript");
+
+  // ── 8. Host-level key custody (safekeys/dev-key-custody, redteam-key-access).
+  // MEASURED GUARANTEE, verified empirically: on macOS, a login-keychain
+  // generic password is readable WITHOUT a prompt by any process running as
+  // the same user — via the `security` CLI or the Security framework
+  // (SecKeychainFindGenericPassword returns success silently, regardless of
+  // the -T ACL). The Keychain here is therefore a STORAGE improvement (no
+  // plaintext key file in the repo, item outside the working tree), NOT an
+  // access boundary. The strong local boundary is the separate-user mode
+  // (scripts/separate-user-mode.sh). This section asserts what macOS can
+  // actually enforce:
+  //   a. no plaintext key file in the dev dir without an explicit opt-in;
+  //   b. key items are not exported to world-readable files or the repo;
+  //   c. any keychain value that IS silently readable must never equal a
+  //      value placed in a file the agent can read — i.e. we assert the
+  //      DISK property, and record the keychain finding honestly.
+  console.log("\n[8] key-material access from the agent's OS user");
+  {
+    const { existsSync, statSync } = await import("node:fs");
+    const { dirname } = await import("node:path");
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const devDir = process.env.SAFEKEYS_DEV_DIR || join(root, ".dev");
+
+    for (const keyFile of ["kek", "dev-signing-key"]) {
+      const p = join(devDir, keyFile);
+      if (!existsSync(p)) {
+        pass(`${p}: absent from disk (no plaintext key file)`);
+        continue;
+      }
+      if (process.env.SAFEKEYS_ALLOW_INSECURE_KEYSTORE === "1") {
+        console.log(`  note — ${p} exists by explicit opt-in (SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1)`);
+      } else {
+        fail(`${p} exists on disk with no insecure opt-in — agent-readable key material`);
+      }
+    }
+
+    // The repo itself must not contain any exported key material.
+    for (const suspect of [join(root, "keystore.txt"), join(root, "seed.txt"), join(root, ".env.keys")]) {
+      if (existsSync(suspect)) fail(`${suspect}: suspicious key-material file in the repo`);
+      else pass(`${suspect.split("/").pop()}: absent`);
+    }
+
+    // Honest measurement of the Keychain: attempt the silent read and
+    // REPORT, not fail, what macOS actually enforces. If a future macOS
+    // hardens this, tighten this check to fail.
+    for (const item of [
+      { service: "safekeys", account: "kek", label: "KEK keychain item" },
+      { service: "safekeys", account: "dev-signing-key", label: "signing seed keychain item" },
+    ]) {
+      const proc = spawnSync("security", ["find-generic-password", "-s", item.service, "-a", item.account, "-w"], {
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      if (proc.status === 0) {
+        console.log(`  note — ${item.label}: silently readable by a same-user process (macOS login-keychain reality; the access boundary is the separate-user mode)`);
+      } else if (/could not be found/i.test((proc.stderr || "").toString())) {
+        console.log(`  note — ${item.label}: item absent (not provisioned on this host)`);
+      } else {
+        pass(`${item.label}: silent read refused (exit ${proc.status})`);
+      }
+    }
+  }
 
   if (failures > 0) {
     console.error(`\nFAIL — ${failures} leak(s) or unexpected behaviours.`);

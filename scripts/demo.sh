@@ -54,8 +54,15 @@ echo "   ok — only a token and a path were returned"
 
 echo
 echo "== 4. Use the secret: the child sees it, we do not =="
-"$SFK" exec --token "$TOKEN" --name API_KEY -- /bin/sh -c \
-  'echo "   child saw ${#API_KEY} chars (value not printed)"' 
+# The backstop denylist refuses interpreters with inline code (sh -c), so the
+# demo runs the check as a script FILE — argv form, which is a legitimate
+# consumer shape. Writing the script out-of-band mirrors how real consumers
+# integrate; the value still reaches only the child's environment.
+CHECK="$(mktemp -t safekeys-demo-check)"
+cat > "$CHECK" <<'CHECKEOF'
+echo "   child saw ${#API_KEY} chars (value not printed)"
+CHECKEOF
+"$SFK" exec --token "$TOKEN" --name API_KEY -- /bin/sh "$CHECK"
 echo "   exit code: $?"
 
 echo
@@ -68,7 +75,11 @@ print(json.loads(base64.urlsafe_b64decode(p))["jti"])')"
 "$SFK" revoke --jti "$JTI"
 
 sleep 1
-if "$SFK" exec --token "$TOKEN" --name API_KEY -- /bin/sh -c 'echo SHOULD-NOT-RUN' 2>/dev/null | grep -q SHOULD-NOT-RUN; then
+REVOKED_CHECK="$(mktemp -t safekeys-demo-revoked)"
+cat > "$REVOKED_CHECK" <<'CHECKEOF'
+echo SHOULD-NOT-RUN
+CHECKEOF
+if "$SFK" exec --token "$TOKEN" --name API_KEY -- /bin/sh "$REVOKED_CHECK" 2>/dev/null | grep -q SHOULD-NOT-RUN; then
   echo "   FAIL: a revoked token still resolved" >&2; exit 1
 fi
 echo "   ok — revoked token refused"

@@ -106,6 +106,50 @@ jobs:
       - name: build
         run: npm run build
 
+  redteam:
+    name: Red team (MCP leak attempts + key custody)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/mcp-server/package-lock.json
+
+      # The red team probes a REAL stack: control plane, sidecar, MCP server.
+      # Linux dev custody uses the containerised OpenBao (SAFEKEYS_VAULT_ADDR),
+      # which dev-up.sh starts automatically.
+      - name: build binaries and MCP server
+        run: |
+          make build
+          (cd packages/mcp-server && npm ci && npm run build)
+
+      - name: start the dev stack
+        run: make dev
+
+      # Sections [1]-[7]: dumpers refused, encodings/partial/split output
+      # redacted, write-then-read limit demonstrated, transcript swept.
+      # Section [8]: no plaintext key material in the dev dir without an
+      # explicit opt-in.
+      #
+      # The script waits out the sidecar's policy cache (65s) after
+      # authoring its allowlist, so the job needs a little over a minute of
+      # script runtime — the overall timeout covers stack startup too.
+      - name: run the red team
+        timeout-minutes: 10
+        run: ./scripts/redteam-mcp.sh
+
+      - name: stop the dev stack
+        if: always()
+        run: make dev-down
+
   python:
     name: Python SDK (lint, typecheck, test)
     runs-on: ubuntu-latest

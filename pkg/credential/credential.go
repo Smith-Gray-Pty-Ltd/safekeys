@@ -32,6 +32,8 @@ const (
 	SourceFile
 	// SourceEnv means the value came from the environment.
 	SourceEnv
+	// SourceKeychain means the value came from the macOS Keychain.
+	SourceKeychain
 )
 
 func (s Source) String() string {
@@ -40,6 +42,8 @@ func (s Source) String() string {
 		return "file"
 	case SourceEnv:
 		return "env"
+	case SourceKeychain:
+		return "keychain"
 	default:
 		return "none"
 	}

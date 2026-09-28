@@ -4,12 +4,13 @@ $type: feature
 $version: 1
 $last_updated: "2026-09-28"
 summary: >-
-  Development-stack key custody: the KEK must not be readable by the same OS user the coding agent
-  runs as. The default dev flow stores the KEK in the macOS Keychain (ACL restricted to the sidecar
-  binary) or a containerised OpenBao dev instance on Linux; a plaintext file survives only behind
-  SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 with a loud startup warning and a permission check, and a
-  documented separate-user mode runs the sidecar as a dedicated user with peer-credential checks on
-  the socket.
+  Development-stack key custody: no key material the coding agent's OS user can read as a plaintext
+  file — the dev KEK in the macOS Keychain or a containerised OpenBao dev instance on Linux, and
+  the token signing seed under the same ladder. A plaintext file survives only behind
+  SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 with a loud startup warning and a permission check; dev-up
+  refuses to start on stale plaintext key files; and a documented separate-user mode runs the
+  sidecar as a dedicated user with peer-credential checks on the socket. The Keychain is a storage
+  improvement, not an access boundary (measured); the separate-user mode is the boundary.
 $system: safekeys/system
 $service: safekeys/sidecar
 intent: >-
@@ -96,13 +97,19 @@ contracts:
     id: default-dev-no-readable-kek
     must_have:
       - >-
-        The default dev flow leaves no KEK file readable by the agent user in the repo or home
-        directory
-      - macOS stores the dev KEK in the Keychain with access restricted to the sidecar binary
+        The default dev flow leaves no key material — KEK or token signing seed — readable by the
+        agent user as a plaintext file in the repo or home directory
+      - >-
+        macOS stores the dev KEK and signing seed as Keychain items outside the working tree; the
+        ACL raises the bar but is NOT an access boundary (measured: same-user processes read
+        silently), so the separate-user mode is the named boundary
       - >-
         Linux stores the dev KEK in a containerised OpenBao dev instance running as its own user,
         never a plaintext file
       - The plaintext key-file path is removed from the default dev flow
+      - >-
+        dev-up refuses to start when a stale plaintext key file exists without the insecure opt-in,
+        and prints the one-line migration command
   - description: The plaintext key-file mode is opt-in, loud, and refuses unsafe permissions.
     id: insecure-file-strict
     must_have:
@@ -168,11 +175,21 @@ decisions:
     status: accepted
     date: "2026-09-28"
   - id: keychain-is-a-speed-bump-not-a-boundary
-    decision: Document the macOS Keychain ACL as raising the bar, not as an OS boundary.
-    rationale: >-
-      A same-user process can still trigger the ACL prompt and a user can approve it. The honest
-      claim is that an agent cannot silently read the KEK; the strong local boundary is the
-      separate-user mode, which mirrors the deployment threat model.
+    decision: Document the macOS Keychain as a storage improvement, not an access boundary, and name the separate-user mode as the strong local boundary.
+    rationale: |-
+      Measured on this machine (2026-09-28, macOS login keychain): a generic-password item created
+      with security add-generic-password -T <binary> is readable WITHOUT any prompt by an arbitrary
+      same-user process — both via the security CLI and via the Security framework
+      (SecKeychainFindGenericPassword returns success silently). The -T ACL governs GUI-level
+      partition lists and does not bind the trusted security tool or framework reads the way the
+      design assumed. The red-team script caught this: the original test expected a denied silent
+      read and measured success.
+    consequences: |-
+      The honest guarantee is: no plaintext key FILE exists in the repo or home directory by
+      default, and key material lives outside the working tree. The red-team key-access section
+      asserts the disk property and records the keychain finding as a measured note. Operators
+      who need a same-host access boundary use scripts/separate-user-mode.sh, which mirrors the
+      deployment's OS-user separation and is the control this feature names for that threat.
     status: accepted
     date: "2026-09-28"
   - id: openbao-dev-is-the-linux-default

@@ -573,9 +573,12 @@ reference_pages:
               across output boundaries. Matches are replaced with [REDACTED:safekeys].
           - text: Secret values never travel on a command line; injection is environment-variable or 0600-file only.
           - text: >-
-              Default development storage keeps the key-encryption key out of agent-readable files
-              (macOS Keychain, or a containerised OpenBao on Linux). A plaintext dev key file exists
-              only behind an explicit opt-in that refuses loose file permissions.
+              Default development storage keeps key material — the key-encryption key and the token
+              signing seed — out of plaintext files the agent's OS user can read (macOS Keychain, or
+              a containerised OpenBao on Linux). A plaintext dev key file exists only behind an
+              explicit opt-in that refuses loose file permissions. The Keychain is a storage
+              improvement, not an access boundary; for a same-host access boundary, run the sidecar
+              as a dedicated user (scripts/separate-user-mode.sh).
           - text: >-
               Policy is deny by default and can bind which commands a token may run; MCP-initiated
               resolves require a command allowlist outright, and known secret-dumping commands are
