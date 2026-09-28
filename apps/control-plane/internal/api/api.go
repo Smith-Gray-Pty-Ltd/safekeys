@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -193,6 +194,21 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 	if rule.ID == "" || (rule.Effect != "allow" && rule.Effect != "deny") || len(rule.Scope) == 0 {
 		writeErr(w, http.StatusBadRequest, "id, effect and scope are required")
 		return
+	}
+	// Command allowlists (safekeys/output-control): every spec must name an
+	// executable and carry well-formed patterns. A malformed pattern must be
+	// rejected here rather than failing closed ambiguously at resolve time.
+	for _, c := range rule.Commands {
+		if c.Exec == "" {
+			writeErr(w, http.StatusBadRequest, "command specs require a non-empty exec")
+			return
+		}
+		for _, p := range c.Args {
+			if _, err := path.Match(p, ""); err != nil {
+				writeErr(w, http.StatusBadRequest, "malformed pattern in command args")
+				return
+			}
+		}
 	}
 	if err := s.store.UpsertPolicyRule(r.Context(), rule); err != nil {
 		writeErr(w, http.StatusInternalServerError, "internal error")

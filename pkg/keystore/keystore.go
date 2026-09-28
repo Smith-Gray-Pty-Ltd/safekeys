@@ -15,6 +15,7 @@ package keystore
 
 import (
 	"encoding/base64"
+	"log"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -148,10 +149,20 @@ var ErrInsecureKeystore = fmt.Errorf(
 		"set SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1 to opt in (never in production)")
 
 // NewLocal opens or creates a local KEK file. It requires the explicit opt-in
-// environment variable so it cannot be enabled by accident in production.
+// environment variable so it cannot be enabled by accident in production,
+// refuses to start when the file is group- or world-readable, and prints a
+// loud warning: this mode is not for real secrets.
 func NewLocal(path string) (*Local, error) {
 	if os.Getenv("SAFEKEYS_ALLOW_INSECURE_KEYSTORE") != "1" {
 		return nil, ErrInsecureKeystore
+	}
+	if st, err := os.Stat(path); err == nil {
+		// A pre-existing key file that is group- or world-readable is a
+		// failure, not a warning: the KEK decrypts every folder it wrapped.
+		perm := st.Mode().Perm()
+		if perm&0o077 != 0 {
+			return nil, fmt.Errorf("local keystore: %s is mode %04o; refusing a key file readable by group or others — chmod 600 it or delete it", path, perm)
+		}
 	}
 	kek, err := os.ReadFile(path)
 	if err != nil {
@@ -172,6 +183,10 @@ func NewLocal(path string) (*Local, error) {
 	if len(kek) != protocol.KEKSize {
 		return nil, fmt.Errorf("local keystore: bad KEK size %d", len(kek))
 	}
+	// Loud, per safekeys/dev-key-custody insecure-file-strict: the operator
+	// must not be able to miss that a plaintext KEK is in play.
+	log.Printf("WARNING: local key store holds the KEK in a PLAINTEXT FILE (%s).", path)
+	log.Printf("WARNING: this mode is NOT FOR REAL SECRETS. Set SAFEKEYS_VAULT_ADDR (or SAFEKEYS_KEYCHAIN=1 on macOS) to remove the plaintext key file.")
 	return &Local{path: path, kek: kek}, nil
 }
 

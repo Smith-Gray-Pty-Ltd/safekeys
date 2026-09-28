@@ -13,6 +13,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/commandpolicy"
 )
 
 // ErrNotFound is returned when a row does not exist.
@@ -81,8 +83,37 @@ type PolicyRule struct {
 	Scope           []string
 	Aud             string
 	InjectionMethod string
-	Priority        int
-	CreatedAt       time.Time
+	// Commands, when non-nil, binds the rule to allowed command
+	// specifications (safekeys/output-control). Nil = unrestricted.
+	Commands  []CommandSpec
+	Priority  int
+	CreatedAt time.Time
+}
+
+// CommandSpec mirrors pkg/commandpolicy.CommandSpec: an executable path
+// pattern plus argument patterns (path.Match globs).
+type CommandSpec = commandpolicy.CommandSpec
+
+// marshalCommands encodes the command specs for storage; nil stores SQL NULL.
+func marshalCommands(specs []CommandSpec) ([]byte, error) {
+	if specs == nil {
+		return nil, nil
+	}
+	return json.Marshal(specs)
+}
+
+// unmarshalCommands decodes a stored commands document; NULL yields nil. A
+// malformed document is an error — the caller must fail closed rather than
+// treat it as unrestricted.
+func unmarshalCommands(b []byte) ([]CommandSpec, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var specs []CommandSpec
+	if err := json.Unmarshal(b, &specs); err != nil {
+		return nil, fmt.Errorf("policy rule commands: %w", err)
+	}
+	return specs, nil
 }
 
 // Audit event names.
@@ -213,14 +244,19 @@ func (s *Store) ListTokens(ctx context.Context, sid string) ([]Token, error) {
 
 // UpsertPolicyRule inserts or replaces a policy rule.
 func (s *Store) UpsertPolicyRule(ctx context.Context, r PolicyRule) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO policy_rules (id, effect, principal, sid, scope, aud, injection_method, priority)
-		VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,NULLIF($6,''),NULLIF($7,''),$8)
+	commandsJSON, err := marshalCommands(r.Commands)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO policy_rules (id, effect, principal, sid, scope, aud, injection_method, commands, priority)
+		VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),$5,NULLIF($6,''),NULLIF($7,''),$8,$9)
 		ON CONFLICT (id) DO UPDATE SET
 			effect=EXCLUDED.effect, principal=EXCLUDED.principal, sid=EXCLUDED.sid,
 			scope=EXCLUDED.scope, aud=EXCLUDED.aud,
-			injection_method=EXCLUDED.injection_method, priority=EXCLUDED.priority`,
-		r.ID, r.Effect, r.Principal, r.SID, r.Scope, r.Aud, r.InjectionMethod, r.Priority)
+			injection_method=EXCLUDED.injection_method, commands=EXCLUDED.commands,
+			priority=EXCLUDED.priority`,
+		r.ID, r.Effect, r.Principal, r.SID, r.Scope, r.Aud, r.InjectionMethod, commandsJSON, r.Priority)
 	return err
 }
 
@@ -228,7 +264,7 @@ func (s *Store) UpsertPolicyRule(ctx context.Context, r PolicyRule) error {
 func (s *Store) ListPolicyRules(ctx context.Context) ([]PolicyRule, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, effect, COALESCE(principal,''), COALESCE(sid,''), scope,
-		       COALESCE(aud,''), COALESCE(injection_method,''), priority, created_at
+		       COALESCE(aud,''), COALESCE(injection_method,''), commands, priority, created_at
 		FROM policy_rules ORDER BY priority DESC, id`)
 	if err != nil {
 		return nil, err
@@ -237,7 +273,12 @@ func (s *Store) ListPolicyRules(ctx context.Context) ([]PolicyRule, error) {
 	var out []PolicyRule
 	for rows.Next() {
 		var r PolicyRule
-		if err := rows.Scan(&r.ID, &r.Effect, &r.Principal, &r.SID, &r.Scope, &r.Aud, &r.InjectionMethod, &r.Priority, &r.CreatedAt); err != nil {
+		var commandsJSON []byte
+		if err := rows.Scan(&r.ID, &r.Effect, &r.Principal, &r.SID, &r.Scope, &r.Aud, &r.InjectionMethod, &commandsJSON, &r.Priority, &r.CreatedAt); err != nil {
+			return nil, err
+		}
+		r.Commands, err = unmarshalCommands(commandsJSON)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, r)

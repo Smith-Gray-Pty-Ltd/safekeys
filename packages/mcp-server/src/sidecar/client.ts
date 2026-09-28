@@ -21,6 +21,13 @@ export interface SidecarRequest {
   scope?: string;
   name?: string;
   command?: string[];
+  /**
+   * Origin of the request: "mcp" here. The sidecar applies the strictest
+   * command policy to MCP-initiated resolves — a command allowlist is
+   * required, and without one the resolve is refused
+   * (safekeys/output-control).
+   */
+  origin?: "mcp" | "cli" | "sdk";
   object_id?: string;
   source_file?: string;
   content_type?: string;

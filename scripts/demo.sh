@@ -14,9 +14,11 @@ DEV="$ROOT/.dev"
 # shellcheck source=lib/common.sh
 source "$ROOT/scripts/lib/common.sh"
 
-# The demo creates secrets through the sidecar, so the local file KEK must be
-# enabled. This is development-only and is not a production configuration.
-export SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1
+# The demo uses whatever KEK custody the dev stack started with
+# (scripts/lib/common.sh): the macOS Keychain or OpenBao transit by default.
+# No plaintext key file is requested — see .usm/features/resolution/dev-key-custody.usm.
+# A demo secret is not a real secret, but the KEK that protects it still
+# decrypts everything else, so the default custody applies here too.
 
 SFK="$ROOT/bin/safekeys"
 SECRET="sk-live-DEMO-$(python3 -c 'import secrets;print(secrets.token_hex(6))')"

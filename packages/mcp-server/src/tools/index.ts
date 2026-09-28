@@ -49,7 +49,7 @@ export interface ToolResult {
   }>;
   /** On resolve_for_tool: the consumer's exit status, when one ran. */
   exit_code?: number;
-  /** The consumer's own stdout, when the caller asked for it. */
+  /** The consumer's own stdout — redacted and size-capped by the sidecar. */
   stdout?: string;
 }
 
@@ -112,7 +112,11 @@ export const ResolveForToolInput = z.object({
     .min(1)
     .describe(
       "The command to run with the secret injected into its environment, as an " +
-        "argv array. The secret appears only in the child's environment.",
+        "argv array. The secret appears only in the child's environment. " +
+        "Commands are policy-limited: an operator-authored command allowlist " +
+        "is REQUIRED for MCP calls, and commands that would print the secret " +
+        "(printenv, env, cat of the secret file, shell -c one-liners, " +
+        "interpreters with inline code) are refused.",
     ),
   name: z
     .string()
@@ -177,14 +181,21 @@ export function makeHandlers(client: SidecarClient): Handlers {
         command: input.command,
         name: input.name,
         scope: input.scope ?? "inject-env",
+        // Every resolve this server makes is MCP-originated. The sidecar
+        // enforces the MCP command policy: an operator-authored allowlist is
+        // required, and relayed output is redacted and size-capped there
+        // (safekeys/output-control) — never trusted to this process.
+        origin: "mcp",
       });
       if (!res.ok) {
         throw new SidecarDeniedError(res.error ?? "denied");
       }
-      // The command's own output is relayed; the injected value is not.
+      // The command's own output is relayed — redacted and size-capped by the
+      // sidecar; the injected value is not present in any encoding the
+      // sidecar's scanner covers.
       return {
         ok: true,
-        message: `Command ran with the secret injected. Exit status ${res.exit_code ?? 0}. The value was never returned to this caller.`,
+        message: `Command ran with the secret injected. Exit status ${res.exit_code ?? 0}. Output is redacted and capped by the sidecar; the value is never returned to this caller.`,
         exit_code: res.exit_code ?? 0,
         stdout: decodeMaybeB64(res.stdout),
       };

@@ -114,6 +114,14 @@ type Config struct {
 	// single-user development arrangement.
 	SocketGroup string
 	SocketMode  os.FileMode
+	// PeerGroup, when set, is the group a connecting process's credentials
+	// must belong to — checked on EVERY connection via SO_PEERCRED, not
+	// inferred from socket file permissions. Filesystem permissions can be
+	// changed by anything with the sidecar user's authority; the kernel's
+	// record of the peer's groups cannot be edited by the connecting process
+	// (safekeys/dev-key-custody, separate-user-socket). Empty disables the
+	// check (single-user dev).
+	PeerGroup   string
 	Audience    string
 	Verifier    resolve.Verifier
 	Revoked     resolve.RevocationChecker
@@ -314,12 +322,55 @@ func (s *Server) Serve(ctx context.Context) error {
 				continue
 			}
 		}
+		// Peer-credential check before any work happens on the connection.
+		// A rejected peer gets a bare close: nothing about the sidecar's
+		// behaviour is observable from outside the group.
+		if s.cfg.PeerGroup != "" {
+			gid, gerr := lookupGID(s.cfg.PeerGroup)
+			if gerr == nil && !peerInGroup(conn, gid) {
+				conn.Close()
+				if s.logf != nil {
+					s.logf("connection refused: peer credentials not in group %q", s.cfg.PeerGroup)
+				}
+				continue
+			}
+		}
 		s.wg.Add(1)
 		go func() {
 			defer s.wg.Done()
 			s.handle(ctx, conn)
 		}()
 	}
+}
+
+// peerInGroup reports whether the connection's peer belongs to gid, using the
+// kernel's credential record (SO_PEERCRED on Linux, LOCAL_PEERCRED on macOS).
+// Unreadable credentials fail CLOSED: without proof of membership the peer is
+// treated as outside the group.
+func peerInGroup(conn net.Conn, gid int) bool {
+	rc, err := conn.(*net.UnixConn).SyscallConn()
+	if err != nil {
+		return false
+	}
+	var cred *peerUcred
+	var credErr error
+	if err := rc.Control(func(fd uintptr) {
+		cred, credErr = getPeerCredentials(fd)
+	}); err != nil {
+		return false
+	}
+	if credErr != nil || cred == nil {
+		return false
+	}
+	if cred.GID == gid {
+		return true
+	}
+	for _, g := range cred.Groups {
+		if g == gid {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) shutdown() {

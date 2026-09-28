@@ -36,8 +36,13 @@ should be rotated, and that Safekeys exists to avoid exactly that.
    reads the file itself. There is no parameter for the value, so do not try to
    pass one. Returns a token and a folder path.
 2. **resolve_for_tool** — takes a token and a command. Runs the command with the
-   secret injected into its environment. Returns the command's own output and
-   exit status, never the value.
+   secret injected into its environment. Returns the command's exit status and
+   its output, REDACTED AND SIZE-CAPPED by the sidecar: the secret value cannot
+   be read back out of the output in any encoding. Commands are policy-limited —
+   an operator-authored allowlist is required, and commands that would print
+   the secret (printenv, env, cat of the secret file, shells and interpreters
+   with inline code) are refused. Do not attempt to read the secret; it is not
+   reachable through this tool by design.
 3. **list_objects** — metadata only: ids, owners, wrapping-key ids. No values.
 4. **revoke_token** — revokes by jti. Takes effect immediately, not at expiry.
 

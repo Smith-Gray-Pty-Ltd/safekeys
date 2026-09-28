@@ -212,10 +212,16 @@ func creatorFor(wrapper protocol.KeyWrapper, kid, folderRoot string) *created.Cr
 
 // openKeystore selects the key store backend.
 //
-// With SAFEKEYS_VAULT_ADDR set, the KEK lives in OpenBao/Vault Transit and never
-// leaves it — the sidecar only ever sees wrapped, or transiently unwrapped, DEKs.
-// Otherwise it falls back to the local file store, which is development-only and
-// requires an explicit opt-in.
+// The custody ladder (safekeys/dev-key-custody), in order:
+//
+//  1. Vault (SAFEKEYS_VAULT_ADDR) — the KEK lives in OpenBao/Vault Transit
+//     and never leaves it. Production and the Linux dev default.
+//  2. Keychain (macOS, SAFEKEYS_KEYCHAIN=1) — the KEK is a Keychain item
+//     whose ACL grants the sidecar binary; no plaintext key file exists.
+//     The dev default on macOS.
+//  3. Local file — DEVELOPMENT ONLY. Requires SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1,
+//     refuses group/world-readable key files, and prints a loud warning:
+//     not for real secrets.
 func openKeystore(vaultAddr, vaultToken, mount, vaultKID, localPath string) (protocol.KeyWrapper, string, func(), error) {
 	if vaultAddr != "" {
 		v := keystore.NewVault(vaultAddr, vaultToken, mount)
@@ -224,6 +230,17 @@ func openKeystore(vaultAddr, vaultToken, mount, vaultKID, localPath string) (pro
 		}
 		log.Printf("sidecar: keystore = vault transit (%s, key %q); the KEK never leaves the vault", vaultAddr, vaultKID)
 		return v, vaultKID, func() {}, nil
+	}
+	if os.Getenv("SAFEKEYS_KEYCHAIN") == "1" {
+		kc, err := keystore.NewKeychain("safekeys")
+		if err != nil {
+			return nil, "", nil, err
+		}
+		if kc.Created() {
+			log.Printf("sidecar: generated a new KEK in the macOS Keychain (service %q, ACL restricted to this binary)", "safekeys")
+		}
+		log.Printf("sidecar: keystore = macOS Keychain; no plaintext key file exists")
+		return kc, envOr("SAFEKEYS_KID", "kek-keychain-1"), kc.Close, nil
 	}
 	local, err := keystore.NewLocal(localPath)
 	if err != nil {

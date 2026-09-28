@@ -1,6 +1,7 @@
 package keystore_test
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -93,4 +94,39 @@ func TestKEKPersisted(t *testing.T) {
 	if _, err := b.Unwrap("kek-1", wrapped); err != nil {
 		t.Fatalf("KEK was not persisted: %v", err)
 	}
+}
+
+// TestLocalRefusesLoosePerms is the dev-key-custody contract: a key file that
+// is group- or world-readable must refuse to start — the KEK decrypts every
+// folder it wrapped.
+func TestLocalRefusesLoosePerms(t *testing.T) {
+	t.Setenv("SAFEKEYS_ALLOW_INSECURE_KEYSTORE", "1")
+	dir := t.TempDir()
+	for _, mode := range []os.FileMode{0o644, 0o640, 0o666, 0o604} {
+		path := filepath.Join(dir, "kek")
+		if err := os.WriteFile(path, make([]byte, protocol.KEKSize), mode); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := keystore.NewLocal(path); err == nil {
+			t.Fatalf("keystore loaded a key file with mode %04o", mode)
+		}
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestLocalAcceptsStrictPerms proves a 0600 file still works — the check
+// targets loose permissions, not the mode's existence.
+func TestLocalAcceptsStrictPerms(t *testing.T) {
+	t.Setenv("SAFEKEYS_ALLOW_INSECURE_KEYSTORE", "1")
+	path := filepath.Join(t.TempDir(), "kek")
+	if err := os.WriteFile(path, make([]byte, protocol.KEKSize), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ks, err := keystore.NewLocal(path)
+	if err != nil {
+		t.Fatalf("0600 key file was refused: %v", err)
+	}
+	ks.Close()
 }

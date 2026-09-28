@@ -55,6 +55,11 @@ func (e *Engine) Evaluate(req Request) Decision {
 
 // matches reports whether a rule applies to a request. An empty field on the
 // rule is a wildcard.
+//
+// Note: at issuance there is no argv to check, so the command dimension is
+// not applied here — a rule with Commands still allows ISSUANCE of a token;
+// the binding is enforced at resolve time by the sidecar, where the actual
+// argv is known (safekeys/output-control, commands-in-policy-not-claims).
 func matches(r store.PolicyRule, req Request) bool {
 	if r.Principal != "" && r.Principal != req.Principal {
 		return false

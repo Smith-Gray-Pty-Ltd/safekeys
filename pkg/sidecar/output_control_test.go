@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -524,4 +525,102 @@ func withInsecureKeystore(t *testing.T, path string) (*keystore.Local, error) {
 	t.Helper()
 	t.Setenv("SAFEKEYS_ALLOW_INSECURE_KEYSTORE", "1")
 	return keystore.NewLocal(path)
+}
+
+// ── Separate-user peer-credential check ────────────────────────────────────
+
+// TestPeerGroupDeniesOutsider proves the accept-time credential check: with
+// PeerGroup set to a group this process does not belong to, the sidecar
+// refuses the connection outright — even though the socket file itself would
+// permit connecting (permissions are checked at the kernel credential layer,
+// not only the filesystem).
+func TestPeerGroupDeniesOutsider(t *testing.T) {
+	// Find a group this process is NOT in. GID arithmetic on a number we do
+	// not hold: os.Getgroups() lists ours; pick max+1.
+	mine, err := os.Getgroups()
+	if err != nil {
+		t.Skipf("cannot list groups: %v", err)
+	}
+	outGid := os.Getgid()
+	for {
+		outGid++
+		taken := false
+		for _, g := range mine {
+			if g == outGid {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			break
+		}
+	}
+
+	ctx := context.Background()
+	tmp, err := os.MkdirTemp("", "skpeer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(tmp) })
+
+	store, err := withInsecureKeystore(t, filepath.Join(tmp, "kek"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+
+	_, prv, _ := ed25519.GenerateKey(nil)
+	signer, _ := protocol.NewEd25519Signer("k", prv)
+	verifier, _ := protocol.NewKeySetVerifier(signer.PublicKeys())
+
+	objID := fmt.Sprintf("obj_peer_%016x", time.Now().UnixNano())
+	dek, _ := protocol.NewDEK()
+	t.Cleanup(func() { protocol.Zero(dek) })
+	ct, _ := protocol.EncryptObject(protocol.AlgAES256GCM, dek, []byte("peer-secret"))
+	wrapped, _ := store.Wrap("kek-1", dek)
+	m := &protocol.Manifest{Safekeys: protocol.Version, Objects: []protocol.ManifestObject{{
+		ID: objID, Path: "objects/" + objID + ".enc",
+		Alg: protocol.AlgAES256GCM, WrappedKey: wrapped, WrappingKID: "kek-1",
+	}}}
+	_ = protocol.WriteFolder(filepath.Join(tmp, "folder", objID), m, map[string][]byte{objID: ct}, "peer")
+
+	now := time.Now()
+	claims := protocol.Claims{
+		Iss: "https://cp.test", SID: objID, Scope: []string{protocol.ScopeInjectEnv},
+		Aud: "env-test", Exp: now.Add(time.Hour).Unix(), Nbf: now.Add(-time.Minute).Unix(),
+		JTI: "jti_peer_" + objID[len(objID)-8:],
+	}
+	jws, _ := signer.Sign(protocol.Header{}, claims)
+
+	inj := inject.NewExecInjector()
+	inj.Capture = true
+	srv := sidecar.New(sidecar.Config{
+		SocketPath: filepath.Join(tmp, "s.sock"),
+		Audience:   "env-test",
+		Verifier:   verifier,
+		Source:     folder.New(filepath.Join(tmp, "folder")),
+		Unwrap: func(_ context.Context, kid, wrapped string) ([]byte, error) {
+			return store.Unwrap(kid, wrapped)
+		},
+		Injector:  inj,
+		PeerGroup: strconv.Itoa(outGid),
+	})
+	if err := srv.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	go func() { _ = srv.Serve(ctx) }()
+	waitForSocket(t, srv.Addr())
+
+	cl := &sidecar.Client{SocketPath: srv.Addr()}
+	// The peer is not in the required group: the request must fail. The
+	// failure shape (connection error vs denial) is deliberately not
+	// asserted — a bare close is as valid as an error reply.
+	token := protocol.URI(objID, jws)
+	if resp, rerr := cl.Resolve(ctx, sidecar.Request{
+		Token: token, Scope: protocol.ScopeInjectEnv, Name: "X",
+		Command: []string{"/bin/true"}, Origin: "cli",
+	}); rerr == nil && resp.OK {
+		t.Fatal("peer outside PeerGroup was allowed to resolve")
+	}
 }

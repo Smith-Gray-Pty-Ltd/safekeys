@@ -44,5 +44,22 @@ export SAFEKEYS_API_KEY="${SAFEKEYS_API_KEY:-dev-api-key}"
 export SAFEKEYS_CONTROL_PLANE_URL="${SAFEKEYS_CONTROL_PLANE_URL:-http://localhost:8080}"
 export SAFEKEYS_AUDIENCE="${SAFEKEYS_AUDIENCE:-env-local}"
 export SAFEKEYS_PRINCIPAL="${SAFEKEYS_PRINCIPAL:-operator}"
-export SAFEKEYS_KEYSTORE="${SAFEKEYS_KEYSTORE:-$SAFEKEYS_DEV_DIR/kek}"
 export SAFEKEYS_FOLDER="${SAFEKEYS_FOLDER:-$SAFEKEYS_DEV_DIR/folder}"
+
+# ── Dev KEK custody (safekeys/dev-key-custody) ───────────────────────────────
+# The KEK must not sit in a plaintext file the coding agent's OS user can
+# read. The default ladder:
+#
+#   1. SAFEKEYS_VAULT_ADDR is already set → use it (OpenBao/Vault transit).
+#   2. macOS → SAFEKEYS_KEYCHAIN=1: the KEK is a Keychain item whose ACL
+#      grants the sidecar binary. No plaintext key file exists.
+#   3. Otherwise (Linux without a vault) → the containerised dev OpenBao is
+#      REQUIRED. dev-up.sh starts it if needed; the sidecar gets transit.
+#   4. A plaintext KEK file only ever appears behind an explicit, loud
+#      opt-in: SAFEKEYS_ALLOW_INSECURE_KEYSTORE=1.
+if [[ -z "${SAFEKEYS_VAULT_ADDR:-}" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    export SAFEKEYS_KEYCHAIN="${SAFEKEYS_KEYCHAIN:-1}"
+  fi
+fi
+export SAFEKEYS_VAULT_ADDR="${SAFEKEYS_VAULT_ADDR:-http://localhost:8200}"

@@ -144,8 +144,14 @@ func run() error {
 
 // applyMigrations runs the embedded schema.
 func applyMigrations(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, store.Migrations)
-	return err
+	if _, err := db.ExecContext(ctx, store.Migrations); err != nil {
+		return err
+	}
+	// 002: command allowlists on policy rules (safekeys/output-control).
+	if _, err := db.ExecContext(ctx, store.Migrations002); err != nil {
+		return err
+	}
+	return nil
 }
 
 // loadSigner builds the token signer.
