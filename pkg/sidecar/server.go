@@ -121,16 +121,16 @@ type Config struct {
 	// record of the peer's groups cannot be edited by the connecting process
 	// (safekeys/dev-key-custody, separate-user-socket). Empty disables the
 	// check (single-user dev).
-	PeerGroup   string
-	Audience    string
-	Verifier    resolve.Verifier
-	Revoked     resolve.RevocationChecker
-	Policy      resolve.PolicyChecker
-	Source      resolve.ManifestSource
-	Unwrap      func(ctx context.Context, kid, wrapped string) ([]byte, error)
-	Auditor     resolve.Auditor
-	HostName    string
-	Injector    *inject.ExecInjector
+	PeerGroup string
+	Audience  string
+	Verifier  resolve.Verifier
+	Revoked   resolve.RevocationChecker
+	Policy    resolve.PolicyChecker
+	Source    resolve.ManifestSource
+	Unwrap    func(ctx context.Context, kid, wrapped string) ([]byte, error)
+	Auditor   resolve.Auditor
+	HostName  string
+	Injector  *inject.ExecInjector
 	// Creator handles op=create. When nil, create requests are refused.
 	Creator *created.Creator
 	// Registry handles op=list/op=revoke. Keeping these on the SIDECAR rather

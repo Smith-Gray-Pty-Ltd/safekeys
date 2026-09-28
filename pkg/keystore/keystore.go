@@ -15,9 +15,9 @@ package keystore
 
 import (
 	"encoding/base64"
-	"log"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"

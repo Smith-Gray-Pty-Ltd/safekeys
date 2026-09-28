@@ -26,9 +26,9 @@ import (
 // The item is named by service+account so multiple sidecars on one host do
 // not collide.
 type Keychain struct {
-	service  string
-	account  string
-	exePath  string // the binary whose ACL may read the item
+	service string
+	account string
+	exePath string // the binary whose ACL may read the item
 	kek     []byte
 	loaded  bool
 	created bool // set when this process generated the KEK
