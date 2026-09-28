@@ -23,6 +23,9 @@ import (
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/commandpolicy"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/resolve"
 )
 
 // Rule mirrors the control plane's policy_rules row.
@@ -34,7 +37,12 @@ type Rule struct {
 	Scope           []string `json:"Scope"`
 	Aud             string   `json:"Aud"`
 	InjectionMethod string   `json:"InjectionMethod"`
-	Priority        int      `json:"Priority"`
+	// Commands, when non-empty on an allow rule, binds the resolve to the
+	// listed command specifications: a requested argv must match at least
+	// one spec, or the request is denied (safekeys/output-control,
+	// command-policy). Nil means "no command restriction on this rule".
+	Commands []commandpolicy.CommandSpec `json:"Commands,omitempty"`
+	Priority int                         `json:"Priority"`
 }
 
 // Fetcher loads the current rule set.
@@ -112,20 +120,53 @@ func NewFromRules(rules []Rule) *Engine {
 
 // Allow implements resolve.PolicyChecker.
 //
-// It returns whether the request may proceed and, on denial, the rule id that
-// denied — which is recorded in the audit log, never returned to the caller.
-func (e *Engine) Allow(ctx context.Context, principal, sid, scope, aud, injection string) (bool, string) {
+// It returns whether the request may proceed and, on denial, the rule id or
+// policy name that denied — which is recorded in the audit log, never
+// returned to the caller.
+//
+// The command dimension (safekeys/output-control):
+//
+//   - No matching rule → deny ("default-deny"), unchanged. The backstop
+//     denylist presupposes an allow that got this far; it does not override
+//     default deny.
+//   - A matching allow rule WITHOUT Commands: CLI/SDK requests are allowed
+//     unless the argv hits the backstop denylist (known dumpers); MCP
+//     requests are denied ("mcp-command-allowlist-required") — the model
+//     authors the command, so an explicit allowlist is mandatory.
+//   - A matching allow rule WITH Commands: the argv must match one spec,
+//     whatever the origin.
+func (e *Engine) Allow(ctx context.Context, principal, sid, scope, aud, injection string, command []string, origin string) (bool, string) {
 	rules, err := e.current(ctx)
 	if err != nil {
 		// Fail closed: a checker that cannot read policy must not permit.
 		return false, "policy-unavailable"
 	}
-	for _, r := range rules {
-		if !matches(r, principal, sid, scope, aud, injection) {
+	origin = resolve.EffectiveOrigin(origin)
+	for i := range rules {
+		if !matches(rules[i], principal, sid, scope, aud, injection) {
 			continue
 		}
 		// First match wins, whatever its effect.
-		return r.Effect == "allow", r.ID
+		r := &rules[i]
+		if r.Effect != "allow" {
+			return false, r.ID
+		}
+		if len(r.Commands) == 0 {
+			// Allow without a command restriction: MCP still requires an
+			// allowlist outright; CLI/SDK pass through the backstop filter.
+			if origin == resolve.OriginMCP {
+				return false, "mcp-command-allowlist-required"
+			}
+			if commandpolicy.Refuses(command) {
+				return false, "backstop-denylist"
+			}
+			return true, r.ID
+		}
+		// Rule carries command specs; the argv must match one.
+		if commandpolicy.MatchesAny(r.Commands, command) {
+			return true, r.ID
+		}
+		return false, r.ID + "-command-not-allowed"
 	}
 	// Deny by default. Absence of a matching allow is a denial — allow-by-
 	// default silently fails open as configuration drifts.

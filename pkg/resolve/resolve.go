@@ -12,10 +12,12 @@ package resolve
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/inject"
 	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/protocol"
+	"github.com/Smith-Gray-Pty-Ltd/safekeys/pkg/redact"
 )
 
 // RevocationChecker reports whether a jti is denylisted.
@@ -23,11 +25,16 @@ type RevocationChecker interface {
 	IsRevoked(ctx context.Context, jti string) (bool, error)
 }
 
-// PolicyChecker evaluates host-local policy at resolve time.
+// PolicyChecker evaluates host-local policy at resolve time, including the
+// command dimension from safekeys/output-control.
 type PolicyChecker interface {
 	// Allow reports whether this request may proceed. A false result must be
 	// treated as denial, never as "unknown, proceed".
-	Allow(ctx context.Context, principal, sid, scope, aud, injectionMethod string) (bool, string)
+	//
+	// command carries the argv the caller wants to run (possibly nil for
+	// non-exec methods); origin is the effective Origin constant. The rule
+	// identity of an allow is returned for audit.
+	Allow(ctx context.Context, principal, sid, scope, aud, injectionMethod string, command []string, origin string) (bool, string)
 }
 
 // Auditor records resolve attempts without recording secrets.
@@ -84,6 +91,32 @@ type Request struct {
 	Command   []string // for the exec method
 	Principal string
 	Host      string
+	// Origin is who initiated the request: OriginCLI ("cli"), OriginSDK
+	// ("sdk"), or OriginMCP ("mcp"). Empty is treated as cli — the legacy
+	// posture. MCP-initiated resolves are subject to the strictest command
+	// policy: no allowlist, no run (see safekeys/output-control).
+	Origin string
+}
+
+// Origins a resolve request may carry. An unknown value is treated as cli:
+// the strict MCP rule keys on an explicit "mcp".
+const (
+	OriginCLI = "cli"
+	OriginSDK = "sdk"
+	OriginMCP = "mcp"
+)
+
+// EffectiveOrigin normalises an origin: empty or unknown values are the
+// legacy CLI posture.
+func EffectiveOrigin(o string) string {
+	switch o {
+	case OriginMCP:
+		return OriginMCP
+	case OriginSDK:
+		return OriginSDK
+	default:
+		return OriginCLI
+	}
 }
 
 // Result is what the caller receives. It intentionally cannot carry a value:
@@ -146,9 +179,12 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	// ── 2. Host-local policy. A valid token is still not sufficient.
+	// The command dimension (allowlist, backstop denylist, MCP
+	// deny-by-default) is evaluated here, before any unwrap.
 	if r.Policy != nil {
 		method := methodForScope(req.Scope)
-		allowed, rule := r.Policy.Allow(ctx, claims.Sub, claims.SID, req.Scope, claims.Aud, method)
+		origin := EffectiveOrigin(req.Origin)
+		allowed, rule := r.Policy.Allow(ctx, claims.Sub, claims.SID, req.Scope, claims.Aud, method, req.Command, origin)
 		if !allowed {
 			rec := protocol.NewDenial(protocol.ReasonPolicyDenied)
 			if rule != "" {
@@ -191,7 +227,41 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*Result, error) {
 		return nil, r.deny(ctx, req, protocol.NewDenial(protocol.ReasonMalformed))
 	}
 
-	// ── 7. Audit success without recording the secret. A non-zero exit is
+	// ── 7. Redact the relayed output. The value — and substrings of it —
+	// must not survive into anything returned to the caller, in any
+	// encoding the scanner covers (safekeys/output-control). This runs
+	// before the Result is built, so no caller path can skip it.
+	var stdout, stderr []byte
+	redactions := 0
+	if len(outcome.Stdout) > 0 || len(outcome.Stderr) > 0 {
+		scanner := redact.New(secure.Bytes())
+		var srep redact.Report
+		stdout, srep = scanner.Scan(outcome.Stdout)
+		redactions += srep.Matches
+		if srep.Redacted() {
+			r.audit(ctx, AuditRecord{
+				At: now(), Event: "redact", JTI: claims.JTI, SID: claims.SID,
+				Principal: claims.Sub, Host: r.host(req), Scope: req.Scope,
+				Outcome: "allowed", Reason: redactReason(srep),
+			})
+		}
+		scanner = redact.New(secure.Bytes())
+		var erep redact.Report
+		stderr, erep = scanner.Scan(outcome.Stderr)
+		redactions += erep.Matches
+		if erep.Redacted() {
+			r.audit(ctx, AuditRecord{
+				At: now(), Event: "redact", JTI: claims.JTI, SID: claims.SID,
+				Principal: claims.Sub, Host: r.host(req), Scope: req.Scope,
+				Outcome: "allowed", Reason: redactReason(erep),
+			})
+		}
+	} else {
+		stdout, stderr = outcome.Stdout, outcome.Stderr
+	}
+	_ = redactions
+
+	// ── 8. Audit success without recording the secret. A non-zero exit is
 	// recorded as a normal resolve carrying the status, not as a denial.
 	rec := AuditRecord{
 		At: now(), Event: "resolve", JTI: claims.JTI, SID: claims.SID,
@@ -202,14 +272,24 @@ func (r *Resolver) Resolve(ctx context.Context, req Request) (*Result, error) {
 	}
 	r.audit(ctx, rec)
 
-	// The caller receives a descriptor, the command's output, and its exit
-	// status — never the injected value.
+	// The caller receives a descriptor, the command's redacted output, and
+	// its exit status — never the injected value.
 	return &Result{
 		Descriptor: outcome.Descriptor,
 		ExitCode:   outcome.ExitCode,
-		Stdout:     outcome.Stdout,
-		Stderr:     outcome.Stderr,
+		Stdout:     stdout,
+		Stderr:     stderr,
 	}, nil
+}
+
+// redactReason renders an audit reason for a redaction report: encoding
+// classes and count, never value material.
+func redactReason(rep redact.Report) string {
+	classes := rep.Encodings
+	if len(classes) == 0 {
+		classes = []string{"unknown"}
+	}
+	return fmt.Sprintf("redacted %d match(es): %s", rep.Matches, strings.Join(classes, ","))
 }
 
 // deny records the denial and returns a generic error. The audit reason is

@@ -350,7 +350,7 @@ func (a *recordingAuditor) sawDenial() bool {
 
 type denyPolicy struct{}
 
-func (denyPolicy) Allow(context.Context, string, string, string, string, string) (bool, string) {
+func (denyPolicy) Allow(context.Context, string, string, string, string, string, []string, string) (bool, string) {
 	return false, "test-explicit-deny"
 }
 

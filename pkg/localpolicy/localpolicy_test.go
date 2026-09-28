@@ -31,7 +31,7 @@ func serverFor(t *testing.T, rules *atomic.Value) *httptest.Server {
 // request is denied. Allow-by-default silently fails open as config drifts.
 func TestDefaultDeny(t *testing.T) {
 	e := localpolicy.NewFromRules(nil)
-	allowed, rule := e.Allow(context.Background(), "p", "obj_1", "read", "env", "env")
+	allowed, rule := e.Allow(context.Background(), "p", "obj_1", "read", "env", "env", nil, "cli")
 	if allowed {
 		t.Fatal("an empty rule set allowed a request; default must be deny")
 	}
@@ -45,7 +45,7 @@ func TestAllowRulePermits(t *testing.T) {
 	e := localpolicy.NewFromRules([]localpolicy.Rule{
 		{ID: "allow-read", Effect: "allow", Scope: []string{"read"}},
 	})
-	allowed, _ := e.Allow(context.Background(), "p", "obj_1", "read", "env", "env")
+	allowed, _ := e.Allow(context.Background(), "p", "obj_1", "read", "env", "env", nil, "cli")
 	if !allowed {
 		t.Fatal("an explicit allow was denied")
 	}
@@ -59,11 +59,11 @@ func TestDenyOverridesAllowByPriority(t *testing.T) {
 		{ID: "deny-prod-inject-file", Effect: "deny", Scope: []string{"inject-file"}, Aud: "env-prod", Priority: 10},
 	})
 	// Production is denied: the higher-priority rule wins.
-	if allowed, rule := e.Allow(context.Background(), "p", "o", "inject-file", "env-prod", "file"); allowed || rule != "deny-prod-inject-file" {
+	if allowed, rule := e.Allow(context.Background(), "p", "o", "inject-file", "env-prod", "file", nil, "cli"); allowed || rule != "deny-prod-inject-file" {
 		t.Fatalf("expected the deny rule to win, got allowed=%v rule=%q", allowed, rule)
 	}
 	// Staging is allowed: the deny rule is audience-bound.
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-file", "env-staging", "file"); !allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-file", "env-staging", "file", nil, "cli"); !allowed {
 		t.Fatal("staging should be allowed by the general rule")
 	}
 }
@@ -73,10 +73,10 @@ func TestScopeNarrowing(t *testing.T) {
 	e := localpolicy.NewFromRules([]localpolicy.Rule{
 		{ID: "env-only", Effect: "allow", Scope: []string{"inject-env"}},
 	})
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "env"); !allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "env", nil, "cli"); !allowed {
 		t.Fatal("granted scope was denied")
 	}
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-file", "e", "file"); allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-file", "e", "file", nil, "cli"); allowed {
 		t.Fatal("ungranted scope was allowed")
 	}
 }
@@ -87,10 +87,10 @@ func TestInjectionMethodRestriction(t *testing.T) {
 	e := localpolicy.NewFromRules([]localpolicy.Rule{
 		{ID: "env-injection-only", Effect: "allow", Scope: []string{"inject-env"}, InjectionMethod: "env"},
 	})
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "env"); !allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "env", nil, "cli"); !allowed {
 		t.Fatal("env injection should be allowed")
 	}
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "exec"); allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "inject-env", "e", "exec", nil, "cli"); allowed {
 		t.Fatal("exec injection should be denied when the rule names env")
 	}
 }
@@ -114,7 +114,7 @@ func TestFetchesRulesAndCaches(t *testing.T) {
 		t.Fatalf("expected 1 rule, got %d", e.RuleCount())
 	}
 	for i := 0; i < 3; i++ {
-		if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env"); !allowed {
+		if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env", nil, "cli"); !allowed {
 			t.Fatal("fetched allow rule did not apply")
 		}
 	}
@@ -136,7 +136,7 @@ func TestRuleChangeTakesEffectWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env"); !allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env", nil, "cli"); !allowed {
 		t.Fatal("should start allowed")
 	}
 
@@ -144,7 +144,7 @@ func TestRuleChangeTakesEffectWithoutRestart(t *testing.T) {
 	v.Store([]localpolicy.Rule{})
 	time.Sleep(5 * time.Millisecond)
 
-	if allowed, rule := e.Allow(context.Background(), "p", "o", "read", "x", "env"); allowed {
+	if allowed, rule := e.Allow(context.Background(), "p", "o", "read", "x", "env", nil, "cli"); allowed {
 		t.Fatalf("a removed rule still allowed (rule=%q)", rule)
 	}
 }
@@ -182,7 +182,7 @@ func TestWarmCacheSurvivesOutage(t *testing.T) {
 	up.Store(false)
 	time.Sleep(5 * time.Millisecond)
 
-	if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env"); !allowed {
+	if allowed, _ := e.Allow(context.Background(), "p", "o", "read", "x", "env", nil, "cli"); !allowed {
 		t.Fatal("warm cache did not survive a control-plane outage")
 	}
 }

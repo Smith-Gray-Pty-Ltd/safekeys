@@ -48,6 +48,10 @@ type Request struct {
 	Scope   string   `json:"scope,omitempty"`
 	Name    string   `json:"name,omitempty"`
 	Command []string `json:"command,omitempty"`
+	// Origin names the initiating integration: "cli", "sdk", or "mcp".
+	// MCP-initiated resolves require a command allowlist; empty is treated
+	// as the legacy CLI posture (safekeys/output-control).
+	Origin string `json:"origin,omitempty"`
 
 	// create
 	ObjectID    string   `json:"object_id,omitempty"`
@@ -370,6 +374,7 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 		Name:      req.Name,
 		Command:   req.Command,
 		Principal: req.Principal,
+		Origin:    req.Origin,
 	})
 	if err != nil {
 		// Operator-visible reason (the audit log also carries it). The CLIENT
@@ -382,8 +387,33 @@ func (s *Server) handle(ctx context.Context, conn net.Conn) {
 	}
 	writeResp(conn, Response{
 		OK: true, Descriptor: res.Descriptor, ExitCode: res.ExitCode,
-		Stdout: res.Stdout, Stderr: res.Stderr,
+		Stdout: capOutput(res.Stdout, maxRelayedOutput),
+		Stderr: capOutput(res.Stderr, maxRelayedOutput),
 	})
+}
+
+// maxRelayedOutput caps how much command output is relayed per stream by
+// default (safekeys/output-control, status-only-default): the model needs the
+// command's status and a useful tail of diagnostics, not a firehose.
+const maxRelayedOutput = 4 << 10 // 4 KiB
+
+// capOutput truncates out to at most limit bytes, preserving the TAIL — the
+// end of a command's output is where errors and summaries live. When a
+// truncation happens a marker line is prepended so the caller knows the
+// middle was dropped.
+func capOutput(out []byte, limit int) []byte {
+	if len(out) <= limit {
+		return out
+	}
+	const marker = "...[truncated by safekeys: showing last 4 KiB]...\n"
+	keep := limit - len(marker)
+	if keep < 0 {
+		keep = 0
+	}
+	res := make([]byte, 0, limit)
+	res = append(res, marker...)
+	res = append(res, out[len(out)-keep:]...)
+	return res
 }
 
 // handleCreate performs a create operation. The plaintext is read from the
