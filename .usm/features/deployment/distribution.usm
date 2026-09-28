@@ -1,0 +1,267 @@
+$schema: https://usm.dev/schema/v1.json
+$id: safekeys/distribution
+$type: feature
+$version: 1
+$last_updated: "2026-09-28"
+summary: >-
+  Name reservation and release pipeline for the 0.1.0 publish: npm under @smithgray (safekeys-mcp,
+  safekeys-sdk, safekeys-cli with per-platform binary packages — the esbuild pattern, no lifecycle
+  scripts, no install-time downloads) with defensive unscoped placeholders; PyPI safekeys plus
+  safekeys-mcp/safe-keys placeholders via Trusted Publishing; Docker Hub org safekeys with GHCR
+  canonical mirror, multi-arch, cosign-signed and SBOM-attested; crates.io placeholder crate; Go
+  binaries with checksums and SBOM on the GitHub Release; Homebrew formula prepared for a future
+  tap. Every publish job is gated on a release environment requiring James's approval, and every
+  artefact is verifiable by the installer (cosign verify, npm audit signatures, sha256 checksums).
+  No agent publishes anything: first publishes are human acts listed in docs/RELEASING.md.
+$system: safekeys/system
+$service: safekeys/system
+intent: >-
+  The MVP is real but unnameable: the npm org, PyPI names, Docker org, and crates.io name are either
+  unclaimed, unprepared, or — in one case — squatted by a third party. Reserving the official and
+  defensive names and building a gated, provenance-carrying release pipeline is what lets 0.1.0 ship
+  without a rename later and without shipping under an impersonatable identity.
+status: planned
+flows:
+  - id: tag-triggered-release
+    name: Tag-triggered release pipeline
+    steps:
+      - action: receive
+        id: s1
+        target: A v* tag is pushed.
+      - action: validate
+        id: s2
+        target: >-
+          Build, full test suite, and the red-team job run first; any failure stops the release
+          before a publish job starts.
+      - action: send
+        id: s3
+        target: >-
+          Publish jobs run against the release environment: npm with provenance (the meta package
+          and every per-platform binary package), PyPI via Trusted Publishing, images signed and
+          attested to GHCR and Docker Hub, binaries and checksums and SBOM attached to the Release,
+          Homebrew formula updated.
+      - action: observe
+        id: s4
+        target: Nothing ships without James's environment approval; every artefact carries a digest or provenance record.
+  - id: reserve-names
+    name: Reserve the defensive names
+    steps:
+      - action: setup
+        id: s1
+        target: >-
+          Placeholder packages are prepared: npm safekeys-mcp and safekeys-cli (0.0.1, README only),
+          PyPI safekeys-mcp and safe-keys (0.0.1, README only), crates.io safekeys (0.0.1, doc
+          comment only).
+      - action: observe
+        id: s2
+        target: >-
+          Each placeholder packs cleanly with no code inside (npm pack --dry-run, python -m build,
+          cargo package --list).
+      - action: record
+        id: s3
+        target: >-
+          James executes the one-time account and org creation steps from docs/RELEASING.md and
+          performs every first publish himself.
+  - id: verify-install
+    name: Verify your install
+    steps:
+      - action: receive
+        id: s1
+        target: An operator has installed an artefact — an image, an npm package, or a release binary.
+      - action: validate
+        id: s2
+        target: >-
+          Container images verify with cosign keyless, pinned to the repo's workflow identity
+          (https://github.com/Smith-Gray-Pty-Ltd/safekeys/.github/workflows/release.yml@refs/tags/v*);
+          npm provenance verifies with npm audit signatures; release binaries verify against the
+          sha256 checksums on the GitHub Release.
+      - action: observe
+        id: s3
+        target: >-
+          The verify commands are documented on the security page of the docs site and in
+          SECURITY.md, and fail loudly when the identity or checksum does not match.
+contracts:
+  - description: >-
+      Every distributable carries a name that is either owned by Smith & Gray or defensively
+      reserved, and documentation names only the official channels.
+    id: official-names-only
+    must_have:
+      - npm packages publish under @smithgray: safekeys-mcp, safekeys-sdk, safekeys-cli
+      - >-
+        The CLI meta package @smithgray/safekeys-cli resolves the prebuilt binary through
+        optionalDependencies on per-platform packages (@smithgray/safekeys-cli-darwin-arm64,
+        -darwin-x64, -linux-x64, -linux-arm64, -win32-x64 as applicable) — the esbuild pattern:
+        no download at install time and no lifecycle scripts
+      - >-
+        Unscoped npm safekeys-mcp and safekeys-cli exist as 0.0.1 placeholders with no code and no
+        install scripts
+      - PyPI safekeys is the real SDK; safekeys-mcp and safe-keys are 0.0.1 placeholders pointing at safekeys
+      - >-
+        Docker images publish as safekeys/sidecar and safekeys/control-plane with
+        ghcr.io/smith-gray-pty-ltd/safekeys-* as the canonical mirror
+      - A crates.io safekeys 0.0.1 placeholder crate reserves the Rust name
+      - >-
+        Docs and install snippets reference only official names and never the unscoped npm safekeys
+        package owned by a third party
+      - SECURITY.md states the official package names so impersonation is detectable
+  - description: >-
+      Publishing is gated, reproducible, and provenance-carrying; nothing ships without a human
+      click.
+    id: gated-release-pipeline
+    must_have:
+      - A v* tag runs build, the full test suite, and the red-team job before any publish job
+      - Every publish job targets a GitHub release environment whose required reviewer is James
+      - >-
+        npm packages carry publishConfig access public and provenance true, published via npm
+        provenance from Actions OIDC — including every per-platform CLI package
+      - PyPI publishes via Trusted Publishing (OIDC) with no stored API tokens
+      - >-
+        Container images are multi-arch (amd64, arm64), signed with cosign keyless and accompanied
+        by an SBOM attestation, pushed to GHCR as canonical and Docker Hub as mirror
+      - >-
+        Docker Hub authenticates with a scoped access token (push on the safekeys org only) held in
+        the release environment, the one registry without an OIDC option
+      - >-
+        Go binaries, checksums, and SBOMs attach to the GitHub Release; a Homebrew formula update is
+        generated for a future tap
+      - A dry-run mode exercises the whole pipeline without publishing
+  - description: >-
+      Installers can verify what they installed, and the verification commands are documented where
+      operators will look for them.
+    id: verify-your-install
+    must_have:
+      - >-
+        Container images verify with cosign keyless, pinned to the repository's workflow identity,
+        with the command documented for both GHCR and Docker Hub
+      - npm packages expose provenance and the docs say npm audit signatures to confirm it
+      - Release binaries come with sha256 checksums and a documented verification command
+      - >-
+        The verify commands are in SECURITY.md and on the docs security page, and fail loudly when
+        identity or checksum does not match
+  - description: >-
+      The reservation surface is documented so a human can execute the one-time and per-release
+      steps.
+    id: release-runbook
+    must_have:
+      - >-
+        docs/RELEASING.md lists every reserved name with registry, name, status, owner account, and
+        publisher — including every per-platform CLI binary package
+      - >-
+        The one-time human steps (org creation, trusted publishing, environment, tap repo) are
+        listed in order and marked as James's actions
+      - Per-release steps are listed separately
+      - The empty npm org hold for @safekeys/* is noted: create it, publish nothing
+      - >-
+        A vanity Go module path (safekeys.ai/go) is recorded as a future TODO in the site spec, not
+        switched now
+  - description: The packages themselves are hardened against supply-chain abuse.
+    id: package-hygiene
+    must_have:
+      - No postinstall or any lifecycle scripts in any npm package
+      - Minimal runtime dependencies in every real package
+      - npm 2FA required for the smithgray org and PyPI 2FA on the accounts that publish
+      - >-
+        Versions align at 0.1.0 across Go, npm, and PyPI with a CHANGELOG.md entry covering
+        output-control and dev-key-custody
+      - README and package descriptions mark 0.1.0 as early/preview
+      - >-
+        A curl | sh fallback for the CLI documents downloading the GitHub Release binary and
+        verifying its sha256 checksum; it is secondary to the npm packages
+tests:
+  - contracts:
+      - official-names-only
+    expect:
+      - assertion: no package.json, pyproject.toml, or doc names the unscoped npm safekeys package as an install target
+      - assertion: placeholder packages pack cleanly with no code
+    flow: reserve-names
+    id: placeholder-packages-pack-clean
+    setup:
+      packages:
+        - 'npm: safekeys-mcp, safekeys-cli'
+        - 'pypi: safekeys-mcp, safe-keys'
+        - 'crates: safekeys'
+  - contracts:
+      - official-names-only
+    expect:
+      - assertion: the meta package resolves the platform binary through optionalDependencies with no lifecycle script
+      - assertion: a wrong-platform resolution fails loudly rather than falling back to a download
+    flow: verify-install
+    id: cli-meta-resolves-platform-binary
+    setup:
+      pattern: esbuild
+  - contracts:
+      - gated-release-pipeline
+    expect:
+      - assertion: the release workflow passes in dry-run mode on a test tag
+      - assertion: no publish job runs outside the release environment
+      - assertion: no long-lived registry token is stored in repo secrets except the scoped Docker Hub token in the release environment
+    flow: tag-triggered-release
+    id: pipeline-dry-run-green
+    setup:
+      mode: dry-run
+      tag: v0.0.0-test
+  - contracts:
+      - release-runbook
+    expect:
+      - assertion: docs/RELEASING.md contains the name table and the ordered one-time human steps
+      - assertion: per-release steps are listed separately
+    flow: reserve-names
+    id: runbook-lists-james-steps
+    setup:
+      doc: docs/RELEASING.md
+  - contracts:
+      - package-hygiene
+    expect:
+      - assertion: no npm package declares a postinstall or any lifecycle script
+      - assertion: versions align at 0.1.0 and CHANGELOG.md covers output-control and dev-key-custody
+    flow: reserve-names
+    id: hygiene-checks-pass
+    setup:
+      static_check: true
+  - contracts:
+      - verify-your-install
+    expect:
+      - assertion: the documented cosign command pins the repo's workflow identity and verifies a published image
+      - assertion: npm audit signatures confirm provenance for a published package
+      - assertion: sha256 checksums match a downloaded release binary
+    flow: verify-install
+    id: verify-commands-documented-and-correct
+    setup:
+      doc: SECURITY.md + docs security page
+decisions:
+  - id: esbuild-pattern-for-cli
+    decision: Distribute the CLI as @smithgray/safekeys-cli with optionalDependencies on per-platform packages containing the prebuilt binary.
+    rationale: |-
+      No download at install time, no lifecycle scripts, checksummed by the npm registry itself,
+      and npm installs exactly the one platform package the host needs. This is the pattern esbuild
+      and Rollup use; it survives air-gapped installs, mirrors, and --ignore-scripts better than
+      any installer script would.
+    consequences: |-
+      Five platform packages join the name table and the gated publish job. A test asserts the meta
+      package resolves the right binary per platform and fails loudly on an unsupported platform.
+      The curl | sh path remains, documented as secondary, and verifies a sha256 checksum.
+    status: accepted
+    date: "2026-09-28"
+  - id: ghcr-canonical-dockerhub-mirror
+    decision: Publish images to ghcr.io/smith-gray-pty-ltd as canonical and Docker Hub org safekeys as a mirror.
+    rationale: |-
+      GHCR requires no additional credential (GITHUB_TOKEN suffices) and keeps the image next to the
+      code and its provenance; Docker Hub is where operators search. Deployments pin GHCR digests.
+    status: accepted
+    date: "2026-09-28"
+  - id: no-agent-publishes
+    decision: Every first publish and every account/org creation is performed by James; agents prepare packages, workflows, and the runbook only.
+    rationale: |-
+      First publishes create registry identities that cannot be renamed, and account creation is a
+      human act of authority. The pipeline is gated on a release environment with a required human
+      reviewer for the same reason — nothing ships without a click.
+    status: accepted
+    date: "2026-09-28"
+implementation:
+  primary: scripts/release.sh
+  test_code: packages/cli/test/resolve.test.mjs
+  test_code_status: none
+see_also:
+  - safekeys/output-control
+  - safekeys/deployment-packaging
+  - safekeys/docs-hosting
