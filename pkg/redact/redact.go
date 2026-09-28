@@ -186,7 +186,7 @@ func (s *Scanner) Scan(out []byte) ([]byte, Report) {
 		// Literal pass found something; still run the split pass in case
 		// more remains wrapped.
 	}
-	n2 := s.scanSplit(out, &rep)
+	out, n2 := s.scanSplit(out, &rep)
 	rep.Matches += n2
 	return out, rep
 }
@@ -229,7 +229,7 @@ func (s *Scanner) scanLiteral(out []byte, rep *Report) ([]byte, int) {
 // view of the output, scans THAT, and maps any match back onto the original
 // byte span so the original is redacted. Whitespace between two halves of an
 // encoded value is an artefact of wrapping, not part of the value.
-func (s *Scanner) scanSplit(out []byte, rep *Report) int {
+func (s *Scanner) scanSplit(out []byte, rep *Report) ([]byte, int) {
 	// Elide whitespace: norm holds the remaining bytes, origs[i] the index
 	// in out that norm[i] came from.
 	norm, origs := elide(out)
@@ -261,7 +261,7 @@ func (s *Scanner) scanSplit(out []byte, rep *Report) int {
 			rep.note(nd.encoding)
 		}
 	}
-	return total
+	return out, total
 }
 
 // elide removes CR, LF, TAB, and space from out, returning the compacted

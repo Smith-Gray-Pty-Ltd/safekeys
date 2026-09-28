@@ -14,7 +14,6 @@
 // there.
 package commandpolicy
 
-import "path"
 import "strings"
 
 // CommandSpec is one allowed command: an executable path pattern plus
@@ -47,18 +46,118 @@ func (c CommandSpec) MatchesArgv(argv []string) bool {
 	return true
 }
 
-// globMatch reports whether s matches pattern, treating a literal pattern
-// without metacharacters as an exact compare.
+// globMatch reports whether s matches pattern. Patterns support `*` (any run
+// of characters, INCLUDING separators — this is not path.Match semantics: an
+// argument like /tmp/stolen.txt must match *), `?` (any single character),
+// and character classes. A pattern without metacharacters is an exact
+// compare. Custom rather than path.Match because path.Match's `*` stops at
+// `/`, which would make `*` useless for matching absolute-path arguments.
 func globMatch(pattern, s string) bool {
 	if pattern == s {
 		return true
 	}
-	ok, err := path.Match(pattern, s)
-	if err != nil {
-		// A malformed pattern must not fail open.
+	return globHere(pattern, s)
+}
+
+// globHere matches without separator semantics: * consumes anything.
+func globHere(p, s string) bool {
+	// Iterative two-pointer glob with backtracking on the last '*'.
+	var starP, starS = -1, -1
+	i, j := 0, 0
+	for j < len(s) {
+		if i < len(p) {
+			switch p[i] {
+			case '*':
+				starP, starS = i, j
+				i++
+				continue
+			case '?':
+				i++
+				j++
+				continue
+			case '[':
+				if end := classEnd(p[i:]); end > 0 {
+					if matchClass(p[i:i+end], s[j]) {
+						i += end
+						j++
+						continue
+					}
+				} else if p[i] == s[j] {
+					i++
+					j++
+					continue
+				}
+			default:
+				if p[i] == s[j] {
+					i++
+					j++
+					continue
+				}
+			}
+		}
+		if starP >= 0 {
+			// Backtrack: let the last '*' consume one more character.
+			starS++
+			i = starP + 1
+			j = starS
+			continue
+		}
 		return false
 	}
-	return ok
+	for i < len(p) && p[i] == '*' {
+		i++
+	}
+	return i == len(p)
+}
+
+// classEnd returns the length of a `[...]` class at the start of p, 0 if
+// unterminated.
+func classEnd(p string) int {
+	if len(p) < 2 {
+		return 0
+	}
+	i := 1
+	if p[i] == '^' || p[i] == '!' {
+		i++
+	}
+	if i < len(p) && p[i] == ']' {
+		i++
+	}
+	for i < len(p) && p[i] != ']' {
+		i++
+	}
+	if i == len(p) {
+		return 0
+	}
+	return i + 1
+}
+
+// matchClass reports whether c belongs to the class in p (including [!...] /
+// [^...] negation and a-z ranges).
+func matchClass(p string, c byte) bool {
+	inner := p[1 : len(p)-1]
+	negate := false
+	if strings.HasPrefix(inner, "^") || strings.HasPrefix(inner, "!") {
+		negate = true
+		inner = inner[1:]
+	}
+	matched := false
+	for i := 0; i < len(inner); i++ {
+		if i+2 < len(inner) && inner[i+1] == '-' {
+			if inner[i] <= c && c <= inner[i+2] {
+				matched = true
+			}
+			i += 2
+			continue
+		}
+		if inner[i] == c {
+			matched = true
+		}
+	}
+	if negate {
+		return !matched
+	}
+	return matched
 }
 
 // MatchesAny reports whether argv satisfies any of the specs.

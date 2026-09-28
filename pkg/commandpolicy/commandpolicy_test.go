@@ -115,3 +115,21 @@ func TestMatchesAny(t *testing.T) {
 		t.Fatal("nothing should match cat")
 	}
 }
+
+// TestStarCrossesSeparators pins the glob semantics: `*` in a pattern must
+// match ANY run of characters including `/` — an absolute-path argument
+// matches a bare `*`. path.Match semantics (where `*` stops at `/`) would
+// make every allowlist that writes a path argument silently fail closed.
+func TestStarCrossesSeparators(t *testing.T) {
+	spec := CommandSpec{Exec: "/opt/helper", Args: []string{"write", "*"}}
+	if !spec.MatchesArgv([]string{"/opt/helper", "write", "/var/tmp/stolen.txt"}) {
+		t.Fatal("star did not cross the path separator")
+	}
+	spec2 := CommandSpec{Exec: "/usr/bin/curl", Args: []string{"https://api.example.com/*"}}
+	if !spec2.MatchesArgv([]string{"/usr/bin/curl", "https://api.example.com/v1/users?x=1"}) {
+		t.Fatal("star did not match a URL with slashes and query")
+	}
+	if spec2.MatchesArgv([]string{"/usr/bin/curl", "https://evil.example.com/v1/users"}) {
+		t.Fatal("prefix pattern matched a different host")
+	}
+}

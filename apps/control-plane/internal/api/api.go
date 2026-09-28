@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"path"
 	"strings"
 	"time"
 
@@ -204,7 +203,7 @@ func (s *Server) handlePutPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, p := range c.Args {
-			if _, err := path.Match(p, ""); err != nil {
+			if strings.ContainsAny(p, "\\x00\\n") {
 				writeErr(w, http.StatusBadRequest, "malformed pattern in command args")
 				return
 			}

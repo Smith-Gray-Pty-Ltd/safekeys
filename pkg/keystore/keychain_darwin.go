@@ -5,6 +5,7 @@ package keystore
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -74,10 +75,18 @@ func NewKeychain(service string, opts ...KeychainOption) (*Keychain, error) {
 		}
 		k.created = true
 	}
-	if len(secret) != protocol.KEKSize {
-		return nil, fmt.Errorf("keychain: KEK has %d bytes, want %d", len(secret), protocol.KEKSize)
+	// The item holds the KEK hex-encoded: `security -w` stores a C string,
+	// and raw key bytes can contain NULs or invalid UTF-8 that the CLI would
+	// mangle. Hex is unambiguous, and this is storage encoding, not
+	// protection — the Keychain ACL is the protection.
+	kek, err := hex.DecodeString(strings.TrimSpace(string(secret)))
+	if err != nil {
+		return nil, fmt.Errorf("keychain: stored KEK is not valid hex: %w", err)
 	}
-	k.kek = secret
+	if len(kek) != protocol.KEKSize {
+		return nil, fmt.Errorf("keychain: KEK has %d bytes, want %d", len(kek), protocol.KEKSize)
+	}
+	k.kek = kek
 	k.loaded = true
 	return k, nil
 }
@@ -118,7 +127,7 @@ func (k *Keychain) create() error {
 		"add-generic-password",
 		"-s", k.service,
 		"-a", k.account,
-		"-w", string(key),
+		"-w", hex.EncodeToString(key), // hex: safe as a C string (see read)
 		"-U", // update if it exists
 	}
 	// -T restricts which applications may access the item without a prompt.

@@ -159,6 +159,12 @@ func TestBase64WrappedAcrossLinesRedacted(t *testing.T) {
 	if strings.Contains(got, enc) {
 		t.Fatal("unwrapped encoding still present")
 	}
+	// The output must actually CHANGE: the folded bytes are consumed by the
+	// replacement. Counting a match without rewriting is the bug this
+	// assertion exists to catch (a red-team run found it).
+	if !strings.Contains(got, Placeholder) {
+		t.Fatalf("scan counted matches but returned the output unrewritten: %q", got)
+	}
 }
 
 func fold(s string, width int) string {
