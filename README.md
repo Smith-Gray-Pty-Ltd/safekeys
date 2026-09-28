@@ -2,13 +2,56 @@
 
 > **Secrets move. Models don't see.**
 
-Encrypted transport for secrets through environments, agentic flows, and LLM
-systems — designed so plaintext is never exposed to any model.
+Safekeys is designed so that language models never receive secret values
+through Safekeys itself. Agents handle capability tokens only; the sidecar
+injects plaintext outside the model and redacts anything it relays back.
 
-Safekeys treats secrets as **movable encrypted objects** (ciphertext folders)
-plus **opaque capability tokens**. A privileged local sidecar resolves them
-outside the LLM process. The agent-facing interface is stable as the backend
-hardens from software isolation to hardware and threshold cryptography.
+Encrypted transport for secrets through environments, agentic flows, and LLM
+systems. Safekeys treats secrets as **movable encrypted objects** (ciphertext
+folders) plus **opaque capability tokens**. A privileged local sidecar resolves
+them outside the LLM process. The agent-facing interface is stable as the
+backend hardens from software isolation to hardware and threshold cryptography.
+
+## Security guarantees and limits
+
+Safekeys guarantees that language models never receive secret values through
+Safekeys itself.
+
+**Guarantees**
+
+- Agents see only capability tokens, folder paths, and status. Tokens contain
+  zero secret material and are short-lived, scoped, and audience-bound.
+- Plaintext exists only inside the sidecar's injection path, for the consuming
+  process, and is zeroised immediately after use.
+- Output relayed through the sidecar's API is redacted: the resolved value
+  cannot be read back out of command stdout/stderr in raw, base64, base64url,
+  hex, percent-encoded, or JSON-escaped form — including partial echoes of 8+
+  characters and values split across output boundaries. Matches are replaced
+  with `[REDACTED:safekeys]`.
+- Secret values never travel on a command line; injection is environment-variable
+  or 0600-file only.
+- Default development storage keeps the key-encryption key out of agent-readable
+  files (macOS Keychain, or a containerised OpenBao on Linux). A plaintext dev
+  key file exists only behind an explicit opt-in that refuses loose file
+  permissions.
+- Policy is deny by default and can bind which commands a token may run;
+  MCP-initiated resolves require a command allowlist outright, and known
+  secret-dumping commands are refused for CLI and SDK resolves when no
+  allowlist exists.
+- Every resolve, denial, and redaction is appended to an audit log containing
+  identifiers and outcomes only — stealing the whole log yields no secrets.
+
+**Limits**
+
+- Redaction covers the relay channel only. An allowed command can still
+  exfiltrate data over the network under its own protocols, or write the
+  secret to a file the agent can later read; neither passes back through the
+  relay. Use tight command allowlists for high-value secrets.
+- A rooted host can observe anything its processes can, including the sidecar.
+  Phase 1 moves long-term key custody into hardware; plaintext materialised
+  for a running consumer is observable to root regardless of phase.
+- A human who pastes a secret into a chat has defeated the purpose; no tool
+  can detect that.
 
 ## The Problem
 

@@ -19,20 +19,26 @@ intent: >-
   on macOS, the containerised dev OpenBao on Linux — with a plaintext file available only behind an
   explicit, loudly-warned opt-in, and a documented separate-user mode for hosts where the stronger
   boundary matters.
-status: planned
+status: built
 flows:
   - id: dev-kek-in-keychain
     name: Dev KEK lives in the macOS Keychain
     steps:
       - action: setup
         id: s1
-        target: scripts/dev-up.sh creates or reuses a Keychain item whose ACL grants only the sidecar binary.
+        target: >-
+          scripts/dev-up.sh creates or reuses a Keychain item whose ACL grants only the sidecar
+          binary.
       - action: receive
         id: s2
-        target: The sidecar reads the KEK from the Keychain at startup; no plaintext KEK file exists on disk.
+        target: >-
+          The sidecar reads the KEK from the Keychain at startup; no plaintext KEK file exists on
+          disk.
       - action: observe
         id: s3
-        target: A same-user process other than the sidecar reading the item triggers a user-visible ACL prompt or denial.
+        target: >-
+          A same-user process other than the sidecar reading the item triggers a user-visible ACL
+          prompt or denial.
       - action: observe
         id: s4
         target: .dev/ contains no KEK file and the sidecar resolves normally.
@@ -44,7 +50,9 @@ flows:
         target: The dev Compose stack runs OpenBao in a container under its own user, as it already does.
       - action: receive
         id: s2
-        target: The sidecar uses Vault transit by default on Linux; the KEK never exists as a file the agent user can read.
+        target: >-
+          The sidecar uses Vault transit by default on Linux; the KEK never exists as a file the
+          agent user can read.
       - action: observe
         id: s3
         target: No KEK file appears in .dev/ or the home directory.
@@ -73,17 +81,23 @@ flows:
           as the dedicated user.
       - action: validate
         id: s2
-        target: The sidecar checks the peer credential (uid/gid) of every socket connection, not only filesystem permissions.
+        target: >-
+          The sidecar checks the peer credential (uid/gid) of every socket connection, not only
+          filesystem permissions.
       - action: observe
         id: s3
-        target: An agent in the group resolves; a process outside the group is denied even if socket permissions change.
+        target: >-
+          An agent in the group resolves; a process outside the group is denied even if socket
+          permissions change.
 contracts:
   - description: >-
       The default development flow must not leave a key-encryption key readable by the same OS user
       the coding agent runs as.
     id: default-dev-no-readable-kek
     must_have:
-      - The default dev flow leaves no KEK file readable by the agent user in the repo or home directory
+      - >-
+        The default dev flow leaves no KEK file readable by the agent user in the repo or home
+        directory
       - macOS stores the dev KEK in the Keychain with access restricted to the sidecar binary
       - >-
         Linux stores the dev KEK in a containerised OpenBao dev instance running as its own user,
@@ -144,24 +158,35 @@ tests:
       other_user: out-group
 decisions:
   - id: keep-insecure-keystore-name
-    decision: Keep SAFEKEYS_ALLOW_INSECURE_KEYSTORE as the file-mode opt-in rather than renaming to SAFEKEYS_DEV_INSECURE_KEYFILE.
-    rationale: The variable already exists, is documented, and is asserted by the production refuse test. Renaming it would churn every reference for no security gain; the semantics being added (permission check, loud warning) do not require a new name.
+    decision: >-
+      Keep SAFEKEYS_ALLOW_INSECURE_KEYSTORE as the file-mode opt-in rather than renaming to
+      SAFEKEYS_DEV_INSECURE_KEYFILE.
+    rationale: >-
+      The variable already exists, is documented, and is asserted by the production refuse test.
+      Renaming it would churn every reference for no security gain; the semantics being added
+      (permission check, loud warning) do not require a new name.
     status: accepted
     date: "2026-09-28"
   - id: keychain-is-a-speed-bump-not-a-boundary
     decision: Document the macOS Keychain ACL as raising the bar, not as an OS boundary.
-    rationale: A same-user process can still trigger the ACL prompt and a user can approve it. The honest claim is that an agent cannot silently read the KEK; the strong local boundary is the separate-user mode, which mirrors the deployment threat model.
+    rationale: >-
+      A same-user process can still trigger the ACL prompt and a user can approve it. The honest
+      claim is that an agent cannot silently read the KEK; the strong local boundary is the
+      separate-user mode, which mirrors the deployment threat model.
     status: accepted
     date: "2026-09-28"
   - id: openbao-dev-is-the-linux-default
     decision: Make the containerised dev OpenBao the default Linux dev keystore instead of the local file.
-    rationale: The dev Compose stack already runs OpenBao under its own container user; pointing the sidecar at Vault transit costs no new infrastructure and removes the plaintext file from the default path entirely.
+    rationale: >-
+      The dev Compose stack already runs OpenBao under its own container user; pointing the sidecar
+      at Vault transit costs no new infrastructure and removes the plaintext file from the default
+      path entirely.
     status: accepted
     date: "2026-09-28"
 implementation:
-  primary: apps/sidecar/cmd/sidecar/main.go
+  primary: pkg/keystore/keychain_darwin.go
   test_code: pkg/keystore/keystore_test.go
-  test_code_status: none
+  test_code_status: manual
 see_also:
   - safekeys/envelope-encryption
   - safekeys/deployment-packaging

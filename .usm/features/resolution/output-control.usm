@@ -20,7 +20,7 @@ intent: >-
   defence in depth at the trust boundary, not in the agent's process: redact the value out of
   anything the sidecar relays, make status-only output the default, and let policy bind which
   commands may run.
-status: planned
+status: built
 flows:
   - id: redact-relayed-output
     name: Redact the resolved value out of relayed output
@@ -51,7 +51,9 @@ flows:
         target: The tool result carries the exit code and redacted output capped at 4 KiB.
       - action: validate
         id: s3
-        target: Uncapped output is returned only when policy explicitly allows it for that token's scope and object.
+        target: >-
+          Uncapped output is returned only when policy explicitly allows it for that token's scope
+          and object.
       - action: observe
         id: s4
         target: The tool description tells the model output is redacted and size-capped.
@@ -81,16 +83,18 @@ flows:
       - action: validate
         id: s2
         target: >-
-          The sidecar refuses env, printenv, set, export, cat, head, tail, less, more, echo,
-          printf, tee, cp, mv, dd, base64, xxd, od, hexdump, strings, and any interpreter invoked
-          with an inline-code flag — sh, bash, zsh, fish -c; python, python3 -c; node -e or --eval;
-          perl -e; ruby -e; php -r; awk; osascript -e.
+          The sidecar refuses env, printenv, set, export, cat, head, tail, less, more, echo, printf,
+          tee, cp, mv, dd, base64, xxd, od, hexdump, strings, and any interpreter invoked with an
+          inline-code flag — sh, bash, zsh, fish -c; python, python3 -c; node -e or --eval; perl -e;
+          ruby -e; php -r; awk; osascript -e.
       - action: record
         id: s3
         target: The refusal is audited with a reason and no value.
       - action: observe
         id: s4
-        target: Documentation states the denylist is a backstop; the controls are the allowlist and redaction.
+        target: >-
+          Documentation states the denylist is a backstop; the controls are the allowlist and
+          redaction.
 contracts:
   - description: >-
       Any output the sidecar captures and relays through its API is scanned for the resolved value
@@ -109,8 +113,8 @@ contracts:
       - Each match is replaced with [REDACTED:safekeys]
       - A redaction event is recorded in the audit log containing no value material
   - description: >-
-      The default resolve_for_tool response carries an exit code and redacted output capped at 4 KiB;
-      larger or uncapped output requires explicit policy.
+      The default resolve_for_tool response carries an exit code and redacted output capped at 4
+      KiB; larger or uncapped output requires explicit policy.
     id: status-only-default
     must_have:
       - The default response carries the exit code, redacted stdout and stderr capped at 4 KiB
@@ -288,34 +292,58 @@ tests:
 decisions:
   - id: redaction-in-sidecar-not-mcp
     decision: Implement redaction in the sidecar's relay path rather than in the MCP server.
-    rationale: The sidecar is the trust boundary every client shares. Redacting in the agent-adjacent MCP server would trust the least privileged component to protect the most sensitive data, and any other socket client (CLI, SDKs) would silently miss the protection.
+    rationale: >-
+      The sidecar is the trust boundary every client shares. Redacting in the agent-adjacent MCP
+      server would trust the least privileged component to protect the most sensitive data, and any
+      other socket client (CLI, SDKs) would silently miss the protection.
     status: accepted
     date: "2026-09-28"
   - id: mcp-deny-by-default
-    decision: MCP-initiated resolves require an explicit command allowlist; without one they are refused regardless of the denylist.
-    rationale: The MCP caller is model-chosen by construction — the model authors the command — so the default posture must be refuse-with-guidance rather than best-effort filtering. The clear error converts a denial into a one-step operator fix. CLI and SDK resolves are operator-initiated, where the backstop denylist plus redaction is a defensible default.
-    consequences: The resolve request gains an origin field (mcp, cli, sdk). Operators must author allowlists for MCP use; the error message makes that actionable.
+    decision: >-
+      MCP-initiated resolves require an explicit command allowlist; without one they are refused
+      regardless of the denylist.
+    rationale: >-
+      The MCP caller is model-chosen by construction — the model authors the command — so the
+      default posture must be refuse-with-guidance rather than best-effort filtering. The clear
+      error converts a denial into a one-step operator fix. CLI and SDK resolves are
+      operator-initiated, where the backstop denylist plus redaction is a defensible default.
+    consequences: >-
+      The resolve request gains an origin field (mcp, cli, sdk). Operators must author allowlists
+      for MCP use; the error message makes that actionable.
     status: accepted
     date: "2026-09-28"
   - id: denylist-is-a-backstop
-    decision: Keep a denylist of known dumpers for CLI and SDK resolves and document it as a backstop, not the control.
-    rationale: The allowlist and redaction are the controls. A denylist cannot enumerate every exfiltration vector, and pretending otherwise would overstate the guarantee. The list is still worth having because it catches the lazy injection for free.
+    decision: >-
+      Keep a denylist of known dumpers for CLI and SDK resolves and document it as a backstop, not
+      the control.
+    rationale: >-
+      The allowlist and redaction are the controls. A denylist cannot enumerate every exfiltration
+      vector, and pretending otherwise would overstate the guarantee. The list is still worth having
+      because it catches the lazy injection for free.
     status: accepted
     date: "2026-09-28"
   - id: commands-in-policy-not-claims
     decision: Command restrictions live in policy rules, not token claims.
-    rationale: The token claims schema is frozen by conformance vectors and adding command syntax to every token would bloat the artefact agents reason about. Policy rules are operator-authored and changeable without touching the wire format.
+    rationale: >-
+      The token claims schema is frozen by conformance vectors and adding command syntax to every
+      token would bloat the artefact agents reason about. Policy rules are operator-authored and
+      changeable without touching the wire format.
     status: accepted
     date: "2026-09-28"
   - id: substrings-not-whole-value
-    decision: Redact substrings of the secret of 8+ characters (or the full value when shorter), in every listed encoding.
-    rationale: A prompt-injected command rarely prints the whole value — cut, head -c, or a partial log line leaks a prefix or a slice. Short fragments below 8 characters would produce false positives on ordinary output, so the floor is a deliberate trade of completeness for practicality.
+    decision: >-
+      Redact substrings of the secret of 8+ characters (or the full value when shorter), in every
+      listed encoding.
+    rationale: >-
+      A prompt-injected command rarely prints the whole value — cut, head -c, or a partial log line
+      leaks a prefix or a slice. Short fragments below 8 characters would produce false positives on
+      ordinary output, so the floor is a deliberate trade of completeness for practicality.
     status: accepted
     date: "2026-09-28"
 implementation:
-  primary: pkg/sidecar/server.go
-  test_code: pkg/redact/redact_test.go
-  test_code_status: none
+  primary: pkg/redact/redact.go
+  test_code: pkg/sidecar/output_control_test.go
+  test_code_status: manual
 see_also:
   - safekeys/sidecar-resolution
   - safekeys/policy-engine

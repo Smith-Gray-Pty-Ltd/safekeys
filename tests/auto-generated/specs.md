@@ -636,7 +636,7 @@ _Spec file: `.usm-workspace/tests/features/encrypted-folder.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/envelope-encryption.spec.ts`_
 
-## safekeys/dev-key-custody [planned]
+## safekeys/dev-key-custody [built]
 
 ### From flows:
 
@@ -710,7 +710,7 @@ _Spec file: `.usm-workspace/tests/features/dev-key-custody.spec.ts`_
 
 _Spec file: `.usm-workspace/tests/features/exec-wrapper.spec.ts`_
 
-## safekeys/output-control [planned]
+## safekeys/output-control [built]
 
 ### From flows:
 
